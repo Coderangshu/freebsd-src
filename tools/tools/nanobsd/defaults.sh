@@ -483,6 +483,23 @@ install_kernel() {
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
+# direct port of vm_base_packages_list from release/tools/vmimage.subr
+nanobsd_base_packages_list() {
+	echo FreeBSD-set-base
+	[ -z "${WITHOUT_DEBUG_FILES}" ] && echo FreeBSD-set-base-dbg
+	echo FreeBSD-set-kernels
+	[ -z "${WITHOUT_KERNEL_SYMBOLS}" ] && echo FreeBSD-set-kernels-dbg
+	case ${TARGET_ARCH} in
+	amd64 | aarch64 | powerpc64)
+		echo FreeBSD-set-lib32
+		[ -z "${WITHOUT_DEBUG_FILES}" ] && echo FreeBSD-set-lib32-dbg
+	esac
+	echo FreeBSD-set-tests
+	# Also install pkg, since systems with a packaged base system should
+	# have the tools to upgrade themselves.
+	echo pkg
+}
+
 native_xtools() {
 	pprint 2 "Installing the optimized native build tools for cross env"
 	pprint 3 "log: ${NANO_LOG}/_.native_xtools"
