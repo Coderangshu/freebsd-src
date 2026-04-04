@@ -195,11 +195,24 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
+# If world/kernel is built, build packages using pkgbase if NANO_NOPKGBASE is NULL
+if $do_world || $do_kernel ; then
+	if [ -z "${NANO_NOPKGBASE}" ]; then
+		build_packages
+	fi
+fi
+
 if $do_installworld ; then
     clean_world
-    make_conf_install
-    install_world
-    install_etc
+	# If using pkgbase go to new pipeline (installation via pkg)
+    if [ -z "${NANO_NOPKGBASE}" ]; then
+        install_pkgbase
+    else # else use legacy installworld
+        make_conf_install
+        install_world
+        install_etc
+        install_kernel
+    fi
 else
     pprint 2 "Skipping installworld (as instructed)"
 fi
