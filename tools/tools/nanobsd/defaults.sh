@@ -178,6 +178,10 @@ NANO_ALTROOT=s2a
 NANO_DEF_UNAME=root
 NANO_DEF_GNAME=wheel
 
+# Setting this variable mimics the releng scripting.
+# If empty, pkgbase is used. If set to 'yes', the legacy installworld is used.
+NANO_NOPKGBASE=""
+
 #######################################################################
 # Architecture to build.  Corresponds to TARGET_ARCH in a buildworld.
 # Unfortunately, there's no way to set TARGET at this time, and it
