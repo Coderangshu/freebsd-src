@@ -515,6 +515,29 @@ nanobsd_base_packages_list() {
 	echo pkg
 }
 
+# Helper to update METALOG for locally generated databases (e.g. pkg sqlite)
+# direct port from release/tools/vmimage.subr
+metalog_add_data() {
+	local file mode type
+
+	file=$1
+	if [ -f ${NANO_WORLDDIR}/${file} ]; then
+		type=file
+		mode=${2:-0644}
+	elif [ -d ${NANO_WORLDDIR}/${file} ]; then
+		type=dir
+		mode=${2:-0755}
+	else
+		echo "metalog_add_data: ${file} not found" >&2
+		return 1
+	fi
+	if [ -n "${NANO_METALOG}" ]; then
+		echo "${file} type=${type} uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME} mode=${mode}" >> \
+		    ${NANO_METALOG}
+	fi
+}
+
+
 native_xtools() {
 	pprint 2 "Installing the optimized native build tools for cross env"
 	pprint 3 "log: ${NANO_LOG}/_.native_xtools"
