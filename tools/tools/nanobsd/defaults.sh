@@ -483,6 +483,21 @@ install_kernel() {
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
+build_packages() {
+	pprint 2 "build packages"
+	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bp"
+
+	(
+	nano_make_build_env
+	nano_make_kernel_env
+
+	set -o xtrace
+	cd "${NANO_SRC}"
+	${NANO_PMAKE} packages
+	) > ${MAKEOBJDIRPREFIX}/_.bp 2>&1
+}
+
+
 # direct port of vm_base_packages_list from release/tools/vmimage.subr
 nanobsd_base_packages_list() {
 	echo FreeBSD-set-base
