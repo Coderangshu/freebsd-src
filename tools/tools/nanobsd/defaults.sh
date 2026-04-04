@@ -537,6 +537,88 @@ metalog_add_data() {
 	fi
 }
 
+install_pkgbase() {
+	pprint 2 "install pkgbase"
+	pprint 3 "log: ${NANO_LOG}/_.ip"
+
+	(
+	set -o xtrace
+
+	# Setup local repo if custom packages were built
+	local repo_args=""
+	local pkg_conf="${NANO_LOG}/pkg.conf"
+	local pkg_cache="${MAKEOBJDIRPREFIX}/pkg_cache"
+	mkdir -p "${pkg_cache}" "${NANO_WORLDDIR}"
+
+	cat > "${pkg_conf}" <<EOF
+PKG_CACHEDIR: "${pkg_cache}"
+EOF
+
+	if [ -d "${MAKEOBJDIRPREFIX}/repo" ]; then
+		mkdir -p "${NANO_LOG}/repos"
+		cat > "${NANO_LOG}/repos/local.conf" <<EOF
+local: {
+    url: "file://${MAKEOBJDIRPREFIX}/repo/\${ABI}/latest",
+    enabled: yes
+}
+EOF
+		repo_args="--repo-conf-dir ${NANO_LOG}/repos"
+	fi
+
+	# Determine ABI using pkg capabilities if possible
+	pkg_cmd="${PKG_CMD:-pkg}"
+	if [ -z "${NANO_PKG_ABI}" ]; then
+		local repo_dir="${MAKEOBJDIRPREFIX}/repo"
+		local sample_pkg=""
+		local sh_file=""
+		
+		# Find the cross-compiled target binary if source was built locally. 
+		for sh_file_candidate in "${MAKEOBJDIRPREFIX}${NANO_SRC}"/*.${NANO_ARCH}/bin/sh; do
+			if [ -x "${sh_file_candidate}" ]; then
+				sh_file="${sh_file_candidate}"
+				break
+			fi
+		done
+		
+		# Option 1: Try checking the cross-compiled target binary if source was built locally
+		if [ -n "${sh_file}" ]; then
+			NANO_PKG_ABI=$(${pkg_cmd} -o ABI_FILE="${sh_file}" config ABI)
+
+		# Option 2: Try reading Architecture from an already collected .pkg file
+		elif [ -d "${repo_dir}" ]; then
+			sample_pkg=$(find "${repo_dir}" -name "*.pkg" -print -quit 2>/dev/null || true)
+			if [ -n "${sample_pkg}" ] && [ -f "${sample_pkg}" ]; then
+				NANO_PKG_ABI=$(${pkg_cmd} info -F "${sample_pkg}" | grep "^Architecture" | awk '{print $3}')
+			fi
+		fi
+			
+		# Option 3: Synthesize string mathematically from source code attributes
+		if [ -z "${NANO_PKG_ABI}" ]; then
+			rev=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
+			major_ver=$(echo "$rev" | cut -d. -f1)
+			NANO_PKG_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
+		fi
+	fi
+	pprint 2 "Using ABI: ${NANO_PKG_ABI}"
+
+	# Unprivileged isolated installation copied from vmimage.subr
+	pkg_cmd="${pkg_cmd} -C ${pkg_conf} --rootdir ${NANO_WORLDDIR} ${repo_args} -o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes -o ABI=${NANO_PKG_ABI} -o INSTALL_AS_USER=yes"
+	if [ -n "${NANO_METALOG}" ]; then
+		pkg_cmd="${pkg_cmd} -o METALOG=${NANO_METALOG}"
+	fi
+
+	${pkg_cmd} update
+	selected=$(nanobsd_base_packages_list)
+	${pkg_cmd} install -U ${selected}
+
+	if [ -n "${NANO_METALOG}" ]; then
+		metalog_add_data ./var/db/pkg/local.sqlite
+	fi
+
+	) > ${NANO_LOG}/_.ip 2>&1
+}
+
+
 
 native_xtools() {
 	pprint 2 "Installing the optimized native build tools for cross env"
