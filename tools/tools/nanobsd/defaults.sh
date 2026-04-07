@@ -646,8 +646,12 @@ EOF
 	fi
 
 	# Unprivileged isolated installation copied from vmimage.subr
-	pkg_cmd="${pkg_cmd} -C ${pkg_conf} --rootdir ${NANO_WORLDDIR} ${repo_args} -o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes -o ABI=${NANO_PKG_ABI} -o INSTALL_AS_USER=yes"
+	pkg_cmd="${pkg_cmd} --rootdir ${NANO_WORLDDIR} ${repo_args}
+        -o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes
+        -o ABI=${NANO_PKG_ABI} -o INSTALL_AS_USER=yes"
+
 	if [ -n "${NANO_METALOG}" ]; then
+		touch "${NANO_METALOG}"
 		pkg_cmd="${pkg_cmd} -o METALOG=${NANO_METALOG}"
 	fi
 
@@ -658,6 +662,9 @@ EOF
 	if [ -n "${NANO_METALOG}" ]; then
 		metalog_add_data ./var/db/pkg/local.sqlite
 	fi
+
+	pprint 2 "Cleaning up temporary pkg configurations and cache"
+	rm -rf "${pkg_conf}" "${pkg_cache}" "${repo_config_dir}"
 
 	) > ${NANO_LOG}/_.ip 2>&1
 }
