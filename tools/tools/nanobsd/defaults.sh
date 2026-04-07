@@ -484,6 +484,16 @@ install_kernel() {
 }
 
 build_packages() {
+    get_pkg_abi
+
+	local repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_PKG_ABI}/latest"
+    pprint 2 "build pkgs NANO_SRC: ${NANO_SRC}"
+
+	if [ -f "${repo_dir}/packagesite.pkg" ]; then
+		pprint 2 "Packages already built, skipping 'make packages'"
+		return 0
+	fi
+
 	pprint 2 "build packages"
 	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bp"
 
