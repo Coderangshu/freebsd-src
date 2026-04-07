@@ -211,7 +211,6 @@ if $do_installworld ; then
         make_conf_install
         install_world
         install_etc
-        install_kernel
     fi
 else
     pprint 2 "Skipping installworld (as instructed)"
@@ -224,7 +223,11 @@ if ${do_prep_image} ; then
 	setup_nanobsd_etc
 fi
 if $do_installkernel ; then
-	install_kernel
+    if [ -n "${NANO_NOPKGBASE}" ]; then
+        install_kernel
+    else
+        pprint 3 "Kernel already installed via Pkgbase pipeline"
+    fi
 else
 	pprint 2 "Skipping installkernel (as instructed)"
 fi
