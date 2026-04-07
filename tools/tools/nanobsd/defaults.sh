@@ -483,6 +483,52 @@ install_kernel() {
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
+get_pkg_abi() {
+	if [ -n "${NANO_PKG_ABI}" ]; then
+		return 0
+	fi
+
+    pprint 2 "Detecting target ABI"
+    pprint 3 "log: ${NANO_LOG}/_.bp"
+
+	local pkg_cmd="${PKG_CMD:-pkg}"
+	local sh_file=""
+    local sh_file_candidate=""
+
+    # Find the cross-compiled target binary if source was built locally.
+	for sh_file_candidate in "${MAKEOBJDIRPREFIX}${NANO_SRC}"/*.${NANO_ARCH}/bin/sh; do
+		if [ -x "${sh_file_candidate}" ]; then
+			sh_file="${sh_file_candidate}"
+			break
+		fi
+	done
+
+    # Option 1: Try checking the cross-compiled target binary if source was built locally
+	if [ -n "${sh_file}" ]; then
+        pprint 2 "Checking built sh binary for ABI"
+		NANO_PKG_ABI=$(${pkg_cmd} -o ABI_FILE="${sh_file}" config ABI 2>/dev/null || true)
+	fi
+
+	# Option 2: Try reading Architecture from a .pkg file
+	if [ -z "${NANO_PKG_ABI}" ] && [ -d "${repo_dir}" ]; then
+		local sample_pkg=$(find "${repo_dir}" -name "*.pkg" -print -quit 2>/dev/null || true)
+		if [ -n "${sample_pkg}" ] && [ -f "${sample_pkg}" ]; then
+            pprint 2 "Checking any .pkg file for ABI"
+			NANO_PKG_ABI=$(${pkg_cmd} info -F "${sample_pkg}" | grep "^Architecture" | awk '{print $3}')
+		fi
+	fi
+
+	# Option 3: Hard-coded fallback
+	if [ -z "${NANO_PKG_ABI}" ]; then
+        pprint 2 "Fallback: Synthesizing ABI from newvers.sh"
+		local rev=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
+		local major_ver=$(echo "$rev" | cut -d. -f1)
+		NANO_PKG_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
+	fi
+
+	pprint 2 "Extracted Pkgbase ABI: ${NANO_PKG_ABI}"
+}
+
 build_packages() {
     get_pkg_abi
 
