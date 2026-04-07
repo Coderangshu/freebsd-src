@@ -605,65 +605,45 @@ install_pkgbase() {
 	pprint 2 "install pkgbase"
 	pprint 3 "log: ${NANO_LOG}/_.ip"
 
+    get_pkg_abi
+
 	(
 	set -o xtrace
 
 	# Setup local repo if custom packages were built
 	local repo_args=""
+	local repo_config_dir=""
 	local pkg_conf="${NANO_LOG}/pkg.conf"
 	local pkg_cache="${MAKEOBJDIRPREFIX}/pkg_cache"
-	mkdir -p "${pkg_cache}" "${NANO_WORLDDIR}"
+    local pkg_cmd="${PKG_CMD:-pkg}"
+
+	mkdir -p "${pkg_cache}"
 
 	cat > "${pkg_conf}" <<EOF
 PKG_CACHEDIR: "${pkg_cache}"
 EOF
 
-	if [ -d "${MAKEOBJDIRPREFIX}/repo" ]; then
-		mkdir -p "${NANO_LOG}/repos"
-		cat > "${NANO_LOG}/repos/local.conf" <<EOF
+	if [ -d "${MAKEOBJDIRPREFIX}/usr/src/repo" ]; then
+        repo_config_dir="${NANO_LOG}/repo_config"
+		mkdir -p "${repo_config_dir}"
+
+		# 1. Local repository for custom built base packages
+		cat > "${repo_config_dir}/local.conf" <<EOF
 local: {
-    url: "file://${MAKEOBJDIRPREFIX}/repo/\${ABI}/latest",
+    url: "file://${MAKEOBJDIRPREFIX}/usr/src/repo/\${ABI}/latest",
     enabled: yes
 }
 EOF
-		repo_args="--repo-conf-dir ${NANO_LOG}/repos"
+        # 2. Official internet repository to fetch the 'pkg' tool
+		cat > "${repo_config_dir}/freebsd.conf" <<EOF
+freebsd: {
+    url: "pkg+http://pkg.FreeBSD.org/\${ABI}/latest",
+    mirror_type: "srv",
+    enabled: yes
+}
+EOF
+		repo_args="--repo-conf-dir ${repo_config_dir}"
 	fi
-
-	# Determine ABI using pkg capabilities if possible
-	pkg_cmd="${PKG_CMD:-pkg}"
-	if [ -z "${NANO_PKG_ABI}" ]; then
-		local repo_dir="${MAKEOBJDIRPREFIX}/repo"
-		local sample_pkg=""
-		local sh_file=""
-		
-		# Find the cross-compiled target binary if source was built locally. 
-		for sh_file_candidate in "${MAKEOBJDIRPREFIX}${NANO_SRC}"/*.${NANO_ARCH}/bin/sh; do
-			if [ -x "${sh_file_candidate}" ]; then
-				sh_file="${sh_file_candidate}"
-				break
-			fi
-		done
-		
-		# Option 1: Try checking the cross-compiled target binary if source was built locally
-		if [ -n "${sh_file}" ]; then
-			NANO_PKG_ABI=$(${pkg_cmd} -o ABI_FILE="${sh_file}" config ABI)
-
-		# Option 2: Try reading Architecture from an already collected .pkg file
-		elif [ -d "${repo_dir}" ]; then
-			sample_pkg=$(find "${repo_dir}" -name "*.pkg" -print -quit 2>/dev/null || true)
-			if [ -n "${sample_pkg}" ] && [ -f "${sample_pkg}" ]; then
-				NANO_PKG_ABI=$(${pkg_cmd} info -F "${sample_pkg}" | grep "^Architecture" | awk '{print $3}')
-			fi
-		fi
-			
-		# Option 3: Synthesize string mathematically from source code attributes
-		if [ -z "${NANO_PKG_ABI}" ]; then
-			rev=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
-			major_ver=$(echo "$rev" | cut -d. -f1)
-			NANO_PKG_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
-		fi
-	fi
-	pprint 2 "Using ABI: ${NANO_PKG_ABI}"
 
 	# Unprivileged isolated installation copied from vmimage.subr
 	pkg_cmd="${pkg_cmd} -C ${pkg_conf} --rootdir ${NANO_WORLDDIR} ${repo_args} -o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes -o ABI=${NANO_PKG_ABI} -o INSTALL_AS_USER=yes"
