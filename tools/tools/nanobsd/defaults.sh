@@ -488,60 +488,60 @@ get_pkg_abi() {
 		return 0
 	fi
 
+	local log_file="$1"
+	if [ -z "${log_file}" ]; then
+		log_file="${NANO_LOG}/_.abi"
+	fi
+
     pprint 2 "Detecting target ABI"
-    pprint 3 "log: ${NANO_LOG}/_.bp"
+    pprint 3 "log: ${log_file}"
 
-	local pkg_cmd="${PKG_CMD:-pkg}"
-	local sh_file=""
-    local sh_file_candidate=""
+	{
+		local pkg_cmd="${PKG_CMD:-pkg}"
+		local sh_file=""
+		local sh_file_candidate=""
 
-    # Find the cross-compiled target binary if source was built locally.
-	for sh_file_candidate in "${MAKEOBJDIRPREFIX}${NANO_SRC}"/*.${NANO_ARCH}/bin/sh; do
-		if [ -x "${sh_file_candidate}" ]; then
-			sh_file="${sh_file_candidate}"
-			break
+		# Find the cross-compiled target binary if source was built locally.
+		for sh_file_candidate in "${MAKEOBJDIRPREFIX}${NANO_SRC}"/*.${NANO_ARCH}/bin/sh/sh; do
+			if [ -x "${sh_file_candidate}" ]; then
+				sh_file="${sh_file_candidate}"
+				break
+			fi
+		done
+
+		# Option 1: Try checking the cross-compiled target binary if source was built locally
+		if [ -n "${sh_file}" ]; then
+			echo "Checking built ${sh_file} binary for ABI"
+			NANO_PKG_ABI=$(${pkg_cmd} -o ABI_FILE="${sh_file}" config ABI 2>/dev/null || true)
 		fi
-	done
 
-    # Option 1: Try checking the cross-compiled target binary if source was built locally
-	if [ -n "${sh_file}" ]; then
-        pprint 2 "Checking built sh binary for ABI"
-		NANO_PKG_ABI=$(${pkg_cmd} -o ABI_FILE="${sh_file}" config ABI 2>/dev/null || true)
-	fi
-
-	# Option 2: Try reading Architecture from a .pkg file
-	if [ -z "${NANO_PKG_ABI}" ] && [ -d "${repo_dir}" ]; then
-		local sample_pkg=$(find "${repo_dir}" -name "*.pkg" -print -quit 2>/dev/null || true)
-		if [ -n "${sample_pkg}" ] && [ -f "${sample_pkg}" ]; then
-            pprint 2 "Checking any .pkg file for ABI"
-			NANO_PKG_ABI=$(${pkg_cmd} info -F "${sample_pkg}" | grep "^Architecture" | awk '{print $3}')
+		# Option 2: Hard-coded fallback
+		if [ -z "${NANO_PKG_ABI}" ]; then
+			echo "Fallback: Synthesizing ABI from newvers.sh"
+			local rev=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
+			local major_ver=$(echo "$rev" | cut -d. -f1)
+			NANO_PKG_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
 		fi
-	fi
 
-	# Option 3: Hard-coded fallback
-	if [ -z "${NANO_PKG_ABI}" ]; then
-        pprint 2 "Fallback: Synthesizing ABI from newvers.sh"
-		local rev=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
-		local major_ver=$(echo "$rev" | cut -d. -f1)
-		NANO_PKG_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
-	fi
+		echo "Extracted Pkgbase ABI: ${NANO_PKG_ABI}"
+	} >> "${log_file}" 2>&1
 
-	pprint 2 "Extracted Pkgbase ABI: ${NANO_PKG_ABI}"
+	export NANO_PKG_ABI
 }
 
 build_packages() {
-    get_pkg_abi
+	local log_file="${MAKEOBJDIRPREFIX}/_.bp"
+    > "${log_file}" # Truncate log file first to clear old runs
+    get_pkg_abi "${log_file}"
 
 	local repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_PKG_ABI}/latest"
-    pprint 2 "build pkgs NANO_SRC: ${NANO_SRC}"
-
 	if [ -f "${repo_dir}/packagesite.pkg" ]; then
 		pprint 2 "Packages already built, skipping 'make packages'"
 		return 0
 	fi
 
-	pprint 2 "build packages"
-	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bp"
+	pprint 2 "Build packages"
+	pprint 3 "log: ${log_file}"
 
 	(
 	nano_make_build_env
@@ -550,7 +550,7 @@ build_packages() {
 	set -o xtrace
 	cd "${NANO_SRC}"
 	${NANO_PMAKE} packages
-	) > ${MAKEOBJDIRPREFIX}/_.bp 2>&1
+	) >> "${log_file}" 2>&1
 }
 
 nanobsd_base_packages_list() {
@@ -602,10 +602,12 @@ metalog_add_data() {
 }
 
 install_pkgbase() {
-	pprint 2 "install pkgbase"
-	pprint 3 "log: ${NANO_LOG}/_.ip"
+	local log_file="${NANO_LOG}/_.ip"
+    > "${log_file}" # Truncate log file first to clear old runs
+    get_pkg_abi "${log_file}"
 
-    get_pkg_abi
+	pprint 2 "Install world and kernel via pkgbase"
+	pprint 3 "log: ${log_file}"
 
 	(
 	set -o xtrace
@@ -666,7 +668,7 @@ EOF
 	pprint 2 "Cleaning up temporary pkg configurations and cache"
 	rm -rf "${pkg_conf}" "${pkg_cache}" "${repo_config_dir}"
 
-	) > ${NANO_LOG}/_.ip 2>&1
+	) >> "${log_file}" 2>&1
 }
 
 
