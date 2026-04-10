@@ -488,7 +488,9 @@ get_pkg_abi() {
 		return 0
 	fi
 
-	local log_file="$1"
+    local log_file pkg_cmd sh_file sh_file_candidate revision major_ver
+
+	log_file="$1"
 	if [ -z "${log_file}" ]; then
 		log_file="${NANO_LOG}/_.abi"
 	fi
@@ -497,9 +499,9 @@ get_pkg_abi() {
     pprint 3 "log: ${log_file}"
 
 	{
-		local pkg_cmd="${PKG_CMD:-pkg}"
-		local sh_file=""
-		local sh_file_candidate=""
+		pkg_cmd="${PKG_CMD:-pkg}"
+		sh_file=""
+		sh_file_candidate=""
 
 		# Find the cross-compiled target binary if source was built locally.
 		for sh_file_candidate in "${MAKEOBJDIRPREFIX}${NANO_SRC}"/*.${NANO_ARCH}/bin/sh/sh; do
@@ -518,8 +520,8 @@ get_pkg_abi() {
 		# Option 2: Hard-coded fallback
 		if [ -z "${NANO_PKG_ABI}" ]; then
 			echo "Fallback: Synthesizing ABI from newvers.sh"
-			local rev=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
-			local major_ver=$(echo "$rev" | cut -d. -f1)
+			revision=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
+			major_ver=$(echo "$revision" | cut -d. -f1)
 			NANO_PKG_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
 		fi
 
@@ -530,11 +532,14 @@ get_pkg_abi() {
 }
 
 build_packages() {
-	local log_file="${MAKEOBJDIRPREFIX}/_.bp"
+	local log_file repo_dir
+
+    log_file="${MAKEOBJDIRPREFIX}/_.bp"
+	repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_PKG_ABI}/latest"
+
     > "${log_file}" # Truncate log file first to clear old runs
     get_pkg_abi "${log_file}"
 
-	local repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_PKG_ABI}/latest"
 	if [ -f "${repo_dir}/packagesite.pkg" ]; then
 		pprint 2 "Packages already built, skipping 'make packages'"
 		return 0
@@ -553,56 +558,61 @@ build_packages() {
 	) >> "${log_file}" 2>&1
 }
 
-nanobsd_base_packages_list() {
-	echo FreeBSD-set-base
-	echo FreeBSD-set-kernels
-	echo pkg
 
- #    local repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_PKG_ABI}/latest"
-	#
- #    if ls "${repo_dir}"/FreeBSD-set-base-dbg-* >/dev/null 2>&1; then
-	# 	echo "FreeBSD-set-base-dbg"
-	# fi
-	#
-	# if ls "${repo_dir}"/FreeBSD-set-kernels-dbg-* >/dev/null 2>&1; then
-	# 	echo "FreeBSD-set-kernels-dbg"
-	# fi
-	#
-	# if ls "${repo_dir}"/FreeBSD-set-tests-* >/dev/null 2>&1; then
-	# 	echo "FreeBSD-set-tests"
-	# fi
-
-	# case ${TARGET_ARCH} in
-	# amd64 | aarch64 | powerpc64)
-	# 	echo FreeBSD-set-lib32
-	# 	[ -z "${WITHOUT_DEBUG_FILES}" ] && echo FreeBSD-set-lib32-dbg
-	# esac
+# Read WITHOUT_* values from make.conf.build
+# Usage: echo_var_make_conf_build VARNAME
+echo_var_make_conf_build() {
+	local var_name="$1"
+	if [ -f "${NANO_MAKE_CONF_BUILD}" ]; then
+		(cd / && unset "${var_name}" && . "${NANO_MAKE_CONF_BUILD}" && eval "echo \${${var_name}}")
+	fi
 }
 
-# Helper to update METALOG for locally generated databases (e.g. pkg sqlite)
-# direct port from release/tools/vmimage.subr
-metalog_add_data() {
-	local file mode type
+# Convert to lowercase (POSIX sh compatible)
+# Usage: echo_lower STRING
+echo_lower() {
+	echo "$1" | tr '[:upper:]' '[:lower:]'
+}
 
-	file=$1
-	if [ -f ${NANO_WORLDDIR}/${file} ]; then
-		type=file
-		mode=${2:-0644}
-	elif [ -d ${NANO_WORLDDIR}/${file} ]; then
-		type=dir
-		mode=${2:-0755}
+nanobsd_base_packages_list() {
+	local without_debug_files without_lib32 without_tests
+
+	without_debug_files=$(echo_var_make_conf_build WITHOUT_DEBUG_FILES)
+	without_lib32=$(echo_var_make_conf_build WITHOUT_LIB32)
+	without_tests=$(echo_var_make_conf_build WITHOUT_TESTS)
+
+	if [ "${without_debug_files}" = "false" ]; then
+		echo FreeBSD-kernel-$(echo_lower "${NANO_KERNEL}")-dbg
+		echo FreeBSD-set-base-dbg
 	else
-		echo "metalog_add_data: ${file} not found" >&2
-		return 1
+		echo FreeBSD-kernel-$(echo_lower "${NANO_KERNEL}")
+		echo FreeBSD-set-base
 	fi
-	if [ -n "${NANO_METALOG}" ]; then
-		echo "${file} type=${type} uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME} mode=${mode}" >> \
-		    ${NANO_METALOG}
+
+	echo pkg
+
+	# lib32 for supported architectures
+	if [ "${without_lib32}" = "false" ]; then
+		case ${TARGET_ARCH} in
+		amd64 | aarch64 | powerpc64)
+			echo FreeBSD-set-lib32
+			if [ "${without_debug_files}" = "false" ]; then
+				echo FreeBSD-set-lib32-dbg
+			fi
+			;;
+		esac
+	fi
+
+	# Tests package
+	if [ "${without_tests}" = "false" ]; then
+		echo FreeBSD-set-tests
 	fi
 }
 
 install_pkgbase() {
-	local log_file="${NANO_LOG}/_.ip"
+    local log_file repo_args repo_config_dir pkg_cache pkg_cmd selected
+
+	log_file="${NANO_LOG}/_.ip"
     > "${log_file}" # Truncate log file first to clear old runs
     get_pkg_abi "${log_file}"
 
@@ -613,17 +623,16 @@ install_pkgbase() {
 	set -o xtrace
 
 	# Setup local repo if custom packages were built
-	local repo_args=""
-	local repo_config_dir=""
-	local pkg_conf="${NANO_LOG}/pkg.conf"
-	local pkg_cache="${MAKEOBJDIRPREFIX}/pkg_cache"
-    local pkg_cmd="${PKG_CMD:-pkg}"
+	repo_args=""
+	repo_config_dir=""
+	pkg_cache="${MAKEOBJDIRPREFIX}/pkg_cache"
+    pkg_cmd="${PKG_CMD:-pkg}"
 
-	mkdir -p "${pkg_cache}"
-
-	cat > "${pkg_conf}" <<EOF
-PKG_CACHEDIR: "${pkg_cache}"
-EOF
+	if [ -d "${pkg_cache}" ]; then
+		rm -rf "${pkg_cache}"/*
+	else
+		mkdir -p "${pkg_cache}"
+	fi
 
 	if [ -d "${MAKEOBJDIRPREFIX}/usr/src/repo" ]; then
         repo_config_dir="${NANO_LOG}/repo_config"
@@ -650,7 +659,8 @@ EOF
 	# Unprivileged isolated installation copied from vmimage.subr
 	pkg_cmd="${pkg_cmd} --rootdir ${NANO_WORLDDIR} ${repo_args}
         -o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes
-        -o ABI=${NANO_PKG_ABI} -o INSTALL_AS_USER=yes"
+        -o ABI=${NANO_PKG_ABI} -o INSTALL_AS_USER=yes
+        -o PKG_CACHEDIR=${pkg_cache}"
 
 	if [ -n "${NANO_METALOG}" ]; then
 		touch "${NANO_METALOG}"
@@ -661,12 +671,9 @@ EOF
 	selected=$(nanobsd_base_packages_list)
 	${pkg_cmd} install -U ${selected}
 
-	if [ -n "${NANO_METALOG}" ]; then
-		metalog_add_data ./var/db/pkg/local.sqlite
-	fi
-
-	pprint 2 "Cleaning up temporary pkg configurations and cache"
-	rm -rf "${pkg_conf}" "${pkg_cache}" "${repo_config_dir}"
+    # Update METALOG for locally generated databases (e.g. pkg sqlite)
+	tgt_dir var/db/pkg
+	tgt_touch var/db/pkg/local.sqlite
 
 	) >> "${log_file}" 2>&1
 }
