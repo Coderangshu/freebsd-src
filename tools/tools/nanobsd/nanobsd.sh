@@ -50,7 +50,7 @@ do_prep_image=true
 . "${topdir}/legacy.sh"
 
 set +e
-args=`getopt BKXWbc:fhiIknpqUvw $*`
+args=`getopt BKXWbc:fhiIknpqUvVvw $*`
 if [ $? -ne 0 ] ; then
 	usage
 	exit 2
@@ -139,6 +139,13 @@ do
 		NANO_NOPRIV_BUILD=true
 		shift
 		;;
+	-V)
+		# Vanilla/Fast mode: use pre-built binaries instead of building from source
+		do_vanilla=true
+		do_world=false
+		do_kernel=false
+		shift
+		;;
 	-w)
 		do_world=false
 		shift
@@ -174,7 +181,18 @@ else
 	pprint 2 "Skipping early customization for image prep (as instructed)"
 fi
 
-if $do_world ; then
+if $do_vanilla ; then
+	pprint 1 "Vanilla/Fast mode enabled - using pre-built binaries"
+	if $do_clean ; then
+		clean_build
+	fi
+	clean_world
+	if [ -n "${NANO_NOPKGBASE}" ]; then
+		install_dist
+	else
+		install_pkgbase
+	fi
+elif $do_world ; then
 	if $do_clean ; then
 		clean_build
 	else
@@ -202,7 +220,8 @@ if $do_world || $do_kernel ; then
 	fi
 fi
 
-if $do_installworld ; then
+# Install world only if not in vanilla mode
+if $do_installworld && ! $do_vanilla ; then
     clean_world
 	# If using pkgbase go to new pipeline (installation via pkg)
     if [ -z "${NANO_NOPKGBASE}" ]; then

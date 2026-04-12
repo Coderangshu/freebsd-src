@@ -574,38 +574,66 @@ echo_lower() {
 	echo "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-nanobsd_base_packages_list() {
-	local without_debug_files without_lib32 without_tests
+base_packages_list() {
+	local mode="$1"
+	local without_debug_files without_lib32 without_tests without_src
+	local kernel base src tests lib32
 
 	without_debug_files=$(echo_var_make_conf_build WITHOUT_DEBUG_FILES)
 	without_lib32=$(echo_var_make_conf_build WITHOUT_LIB32)
 	without_tests=$(echo_var_make_conf_build WITHOUT_TESTS)
+	without_src=$(echo_var_make_conf_build WITHOUT_SRC)
 
-	if [ "${without_debug_files}" = "false" ]; then
-		echo FreeBSD-kernel-$(echo_lower "${NANO_KERNEL}")-dbg
-		echo FreeBSD-set-base-dbg
+	if [ "${mode}" = "dist" ]; then
+		base="base.txz"
+		kernel="kernel.txz"
+		src="src.txz"
+		tests="tests.txz"
+		lib32="lib32.txz"
+		if [ "${without_debug_files}" = "false" ]; then
+			kernel="${kernel/.txz/-dbg.txz}"
+			base="${base/.txz/-dbg.txz}"
+			lib32="${lib32/.txz/-dbg.txz}"
+		fi
 	else
-		echo FreeBSD-kernel-$(echo_lower "${NANO_KERNEL}")
-		echo FreeBSD-set-base
+		base="FreeBSD-set-base"
+		kernel="FreeBSD-kernel-$(echo_lower "${NANO_KERNEL}")"
+		src="FreeBSD-src"
+		tests="FreeBSD-set-tests"
+		lib32="FreeBSD-set-lib32"
+		if [ "${without_debug_files}" = "false" ]; then
+			kernel="${kernel}-dbg"
+			base="${base}-dbg"
+			lib32="${lib32}-dbg"
+		fi
 	fi
 
-	echo pkg
+	# Base and Kernel
+	echo "${kernel}"
+	echo "${base}"
+
+	# Pkg tool explicitly installed in pkgbase mode
+	if [ "${mode}" != "dist" ]; then
+		echo pkg
+	fi
+
+	# Source package
+	if [ "${without_src}" = "false" ]; then
+		echo "${src}"
+	fi
 
 	# lib32 for supported architectures
 	if [ "${without_lib32}" = "false" ]; then
 		case ${TARGET_ARCH} in
 		amd64 | aarch64 | powerpc64)
-			echo FreeBSD-set-lib32
-			if [ "${without_debug_files}" = "false" ]; then
-				echo FreeBSD-set-lib32-dbg
-			fi
+			echo "${lib32}"
 			;;
 		esac
 	fi
 
 	# Tests package
 	if [ "${without_tests}" = "false" ]; then
-		echo FreeBSD-set-tests
+		echo "${tests}"
 	fi
 }
 
