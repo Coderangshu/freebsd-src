@@ -181,18 +181,7 @@ else
 	pprint 2 "Skipping early customization for image prep (as instructed)"
 fi
 
-if $do_vanilla ; then
-	pprint 1 "Vanilla/Fast mode enabled - using pre-built binaries"
-	if $do_clean ; then
-		clean_build
-	fi
-	clean_world
-	if [ -n "${NANO_NOPKGBASE}" ]; then
-		install_dist
-	else
-		install_pkgbase
-	fi
-elif $do_world ; then
+if $do_world ; then
 	if $do_clean ; then
 		clean_build
 	else
@@ -213,10 +202,13 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
-# If world/kernel is built, build packages using pkgbase if NANO_NOPKGBASE is NULL
-if $do_world || $do_kernel ; then
-	if [ -z "${NANO_NOPKGBASE}" ]; then
-		build_packages
+if $do_vanilla ; then
+	pprint 1 "Vanilla/Fast mode enabled - using pre-built binaries"
+	clean_world
+	if [ -n "${NANO_NOPKGBASE}" ]; then
+		install_dist
+	else
+		install_pkgbase
 	fi
 fi
 

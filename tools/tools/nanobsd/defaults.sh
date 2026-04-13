@@ -483,7 +483,43 @@ install_kernel() {
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
-get_pkg_abi() {
+# Extract revision and branch from newvers.sh
+get_revision_branch() {
+	if [ -n "${NANO_VERSION}" ]; then
+		echo "${NANO_VERSION}"
+		return 0
+	fi
+	local revision branch final
+
+	revision=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
+	branch=$(awk -F'"' '/^BRANCH=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
+
+	if [ -n "${branch}" ]; then
+		final="${revision}-${branch}"
+	else
+		final="${revision}"
+	fi
+
+	NANO_VERSION="${final}"
+}
+
+# Map NANO_ARCH to the platform/arch format used by FreeBSD download URLs
+get_arch_name() {
+	case "${NANO_ARCH}" in
+	aarch64)   echo "arm64/aarch64" ;;
+	amd64)     echo "amd64/amd64" ;;
+	armv6)     echo "arm/armv6" ;;
+	armv7)     echo "arm/armv7" ;;
+	i386)      echo "i386/i386" ;;
+	powerpc)   echo "powerpc/powerpc" ;;
+	powerpc64) echo "powerpc/powerpc64" ;;
+	riscv64)   echo "riscv/riscv64" ;;
+	*)         echo "${NANO_ARCH}/${NANO_ARCH}" ;;
+	esac
+}
+
+# Get ABI from the target binary if source was built locally.
+get_abi() {
 	if [ -n "${NANO_PKG_ABI}" ]; then
 		return 0
 	fi
@@ -538,7 +574,7 @@ build_packages() {
 	repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_PKG_ABI}/latest"
 
     > "${log_file}" # Truncate log file first to clear old runs
-    get_pkg_abi "${log_file}"
+    get_abi "${log_file}"
 
 	if [ -f "${repo_dir}/packagesite.pkg" ]; then
 		pprint 2 "Packages already built, skipping 'make packages'"
@@ -558,9 +594,7 @@ build_packages() {
 	) >> "${log_file}" 2>&1
 }
 
-
 # Read WITHOUT_* values from make.conf.build
-# Usage: echo_var_make_conf_build VARNAME
 echo_var_make_conf_build() {
 	local var_name="$1"
 	if [ -f "${NANO_MAKE_CONF_BUILD}" ]; then
@@ -569,11 +603,11 @@ echo_var_make_conf_build() {
 }
 
 # Convert to lowercase (POSIX sh compatible)
-# Usage: echo_lower STRING
 echo_lower() {
 	echo "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+# Generate list of packages to install
 base_packages_list() {
 	local mode="$1"
 	local without_debug_files without_lib32 without_tests without_src
@@ -590,59 +624,68 @@ base_packages_list() {
 		src="src.txz"
 		tests="tests.txz"
 		lib32="lib32.txz"
-		if [ "${without_debug_files}" = "false" ]; then
-			kernel="${kernel/.txz/-dbg.txz}"
-			base="${base/.txz/-dbg.txz}"
-			lib32="${lib32/.txz/-dbg.txz}"
-		fi
 	else
 		base="FreeBSD-set-base"
 		kernel="FreeBSD-kernel-$(echo_lower "${NANO_KERNEL}")"
 		src="FreeBSD-src"
 		tests="FreeBSD-set-tests"
 		lib32="FreeBSD-set-lib32"
-		if [ "${without_debug_files}" = "false" ]; then
-			kernel="${kernel}-dbg"
-			base="${base}-dbg"
-			lib32="${lib32}-dbg"
-		fi
 	fi
 
-	# Base and Kernel
+	# Main Base and Kernel (Mandatory)
 	echo "${kernel}"
 	echo "${base}"
 
-	# Pkg tool explicitly installed in pkgbase mode
+	# Debug Symbols (Optional)
+	if [ "${without_debug_files}" = "false" ]; then
+		if [ "${mode}" = "dist" ]; then
+			echo "${kernel/.txz/-dbg.txz}"
+			echo "${base/.txz/-dbg.txz}"
+		else
+			echo "${kernel}-dbg"
+			echo "${base}-dbg"
+		fi
+	fi
+
+	# Pkg tool (Pkgbase mode only)
 	if [ "${mode}" != "dist" ]; then
 		echo pkg
 	fi
 
-	# Source package
+	# Source package (Optional)
 	if [ "${without_src}" = "false" ]; then
 		echo "${src}"
 	fi
 
-	# lib32 for supported architectures
+	# lib32 for supported architectures (Optional)
 	if [ "${without_lib32}" = "false" ]; then
 		case ${TARGET_ARCH} in
 		amd64 | aarch64 | powerpc64)
 			echo "${lib32}"
+			if [ "${without_debug_files}" = "false" ]; then
+				if [ "${mode}" = "dist" ]; then
+					echo "${lib32/.txz/-dbg.txz}"
+				else
+					echo "${lib32}-dbg"
+				fi
+			fi
 			;;
 		esac
 	fi
 
-	# Tests package
+	# Tests package (Optional)
 	if [ "${without_tests}" = "false" ]; then
 		echo "${tests}"
 	fi
 }
 
+# Install world and kernel via pkgbase
 install_pkgbase() {
     local log_file repo_args repo_config_dir pkg_cache pkg_cmd selected
 
 	log_file="${NANO_LOG}/_.ip"
     > "${log_file}" # Truncate log file first to clear old runs
-    get_pkg_abi "${log_file}"
+    get_abi "${log_file}"
 
 	pprint 2 "Install world and kernel via pkgbase"
 	pprint 3 "log: ${log_file}"
@@ -696,7 +739,7 @@ EOF
 	fi
 
 	${pkg_cmd} update
-	selected=$(nanobsd_base_packages_list)
+	selected=$(base_packages_list)
 	${pkg_cmd} install -U ${selected}
 
     # Update METALOG for locally generated databases (e.g. pkg sqlite)
@@ -706,6 +749,76 @@ EOF
 	) >> "${log_file}" 2>&1
 }
 
+# Install from distribution sets (txz files)
+install_dist() {
+	local log_file base_url dist_dir pkg_list dist_arch
+
+	log_file="${NANO_LOG}/_.dist"
+	pprint 2 "Installing from distribution sets"
+	pprint 3 "log: ${log_file}"
+
+	> "${log_file}" # Truncate log file
+	get_abi "${log_file}"
+
+	if [ -z "${NANO_VERSION}" ]; then
+		get_revision_branch
+	fi
+	dist_arch=$(get_arch_name)
+
+	if [ -z "${NANO_VERSION}" ] || [ -z "${dist_arch}" ]; then
+		echo "Error: Cannot resolve Version or Architecture for download!" 1>&2
+		exit 1
+	fi
+
+	base_url="https://download.freebsd.org/snapshots/${dist_arch}/${NANO_VERSION}"
+	dist_dir="${NANO_OBJ}/_.dist"
+
+	(
+	set -o xtrace
+
+	# Create distribution download directory
+	mkdir -p "${dist_dir}"
+
+	dist_list=$(base_packages_list "dist")
+
+	pprint 2 "Downloading distribution sets from ${base_url}"
+
+	for dist in ${dist_list}; do
+		if [ ! -f "${dist_dir}/${dist}" ]; then
+			if ! fetch -o "${dist_dir}/${dist}" "${base_url}/${dist}"; then
+				case "${dist}" in
+				base.txz|kernel.txz)
+					echo "Failed to install image, as download of ${dist} failed" 1>&2
+					exit 1
+					;;
+				*)
+					pprint 2 "${dist} not available, skipping"
+					rm -f "${dist_dir}/${dist}"
+					;;
+				esac
+			fi
+		fi
+	done
+
+	pprint 2 "Extracting distribution sets to ${NANO_WORLDDIR}"
+
+	mkdir -p "${NANO_WORLDDIR}"
+
+	for dist in ${dist_list}; do
+		if [ -f "${dist_dir}/${dist}" ]; then
+			tar -xf "${dist_dir}/${dist}" -C "${NANO_WORLDDIR}"
+		fi
+	done
+
+	# Remove etcupdate database to avoid conflicts
+	rm -rf "${NANO_WORLDDIR}/var/db/etcupdate/"
+	# Remove tests directory (why??)
+	# rm -rf "${NANO_WORLDDIR}/usr/tests/"
+
+	pprint 2 "Distribution sets installed successfully"
+
+	) >> "${log_file}" 2>&1
+}
 
 
 native_xtools() {
