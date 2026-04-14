@@ -681,11 +681,11 @@ base_packages_list() {
 
 # Install world and kernel via pkgbase
 install_pkgbase() {
-    local log_file repo_args repo_config_dir pkg_cache pkg_cmd selected
+	local log_file world_pkg_dir pkg_cache pkg_cmd selected have_local_repo
 
 	log_file="${NANO_LOG}/_.ip"
-    > "${log_file}" # Truncate log file first to clear old runs
-    get_abi "${log_file}"
+	> "${log_file}" # Truncate log file
+	get_abi "${log_file}"
 
 	pprint 2 "Install world and kernel via pkgbase"
 	pprint 3 "log: ${log_file}"
@@ -693,45 +693,75 @@ install_pkgbase() {
 	(
 	set -o xtrace
 
-	# Setup local repo if custom packages were built
-	repo_args=""
-	repo_config_dir=""
-	pkg_cache="${MAKEOBJDIRPREFIX}/pkg_cache"
-    pkg_cmd="${PKG_CMD:-pkg}"
+	# Setup directories
+	world_pkg_dir="${NANO_OBJ}/pkg"
+	pkg_cache="${NANO_OBJ}/pkg_cache"
+	mkdir -p "${world_pkg_dir}" "${pkg_cache}"
 
-	if [ -d "${pkg_cache}" ]; then
-		rm -rf "${pkg_cache}"/*
-	else
-		mkdir -p "${pkg_cache}"
+	# Install pkg trusted key for official repo verification
+	mkdir -p "${NANO_WORLDDIR}/usr/share/keys/pkg/trusted"
+	if [ ! -f "${NANO_WORLDDIR}/usr/share/keys/pkg/trusted/pkg.freebsd.org.2013102301" ]; then
+		cat > "${NANO_WORLDDIR}/usr/share/keys/pkg/trusted/pkg.freebsd.org.2013102301" <<EOF
+function: "sha256"
+fingerprint: "b0170035af3acc5f3f3ae1859dc717101b4e6c1d0a794ad554928ca0cbb2f438"
+EOF
 	fi
 
+	# Check if local repo exists (custom built packages)
+	have_local_repo=""
 	if [ -d "${MAKEOBJDIRPREFIX}/usr/src/repo" ]; then
-        repo_config_dir="${NANO_LOG}/repo_config"
-		mkdir -p "${repo_config_dir}"
-
-		# 1. Local repository for custom built base packages
-		cat > "${repo_config_dir}/local.conf" <<EOF
-local: {
-    url: "file://${MAKEOBJDIRPREFIX}/usr/src/repo/\${ABI}/latest",
-    enabled: yes
-}
-EOF
-        # 2. Official internet repository to fetch the 'pkg' tool
-		cat > "${repo_config_dir}/freebsd.conf" <<EOF
-freebsd: {
-    url: "pkg+http://pkg.FreeBSD.org/\${ABI}/latest",
-    mirror_type: "srv",
-    enabled: yes
-}
-EOF
-		repo_args="--repo-conf-dir ${repo_config_dir}"
+		have_local_repo="yes"
+		pprint 2 "Local repository found - will use for available packages"
 	fi
 
-	# Unprivileged isolated installation copied from vmimage.subr
-	pkg_cmd="${pkg_cmd} --rootdir ${NANO_WORLDDIR} ${repo_args}
-        -o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes
-        -o ABI=${NANO_PKG_ABI} -o INSTALL_AS_USER=yes
-        -o PKG_CACHEDIR=${pkg_cache}"
+	# Create repository configuration
+	# Priority: local repo first (if exists), then official repos
+	if [ -n "${have_local_repo}" ]; then
+		cat > "${world_pkg_dir}/local.conf" <<EOF
+local: {
+	url: "file:///${MAKEOBJDIRPREFIX}/usr/src/repo/\${ABI}/latest",
+	priority: 1
+	enabled: yes,
+}
+EOF
+	fi
+
+	cat > "${world_pkg_dir}/FreeBSD-base.conf" <<EOF
+FreeBSD-base: {
+	url: "pkg+https://pkg.freebsd.org/\${ABI}/base_latest",
+	mirror_type: "srv",
+	signature_type: "fingerprints",
+	fingerprints: "/usr/share/keys/pkg",
+	enabled: yes
+}
+EOF
+
+	cat > "${world_pkg_dir}/FreeBSD-ports.conf" <<EOF
+FreeBSD-ports: {
+	url: "pkg+https://pkg.freebsd.org/\${ABI}/latest",
+	mirror_type: "srv",
+	signature_type: "fingerprints",
+	fingerprints: "/usr/share/keys/pkg",
+	enabled: yes
+}
+EOF
+
+	cat > "${world_pkg_dir}/FreeBSD-ports-kmods.conf" <<EOF
+FreeBSD-ports-kmods: {
+	url: "pkg+https://pkg.freebsd.org/\${ABI}/kmods_latest",
+	mirror_type: "srv",
+	url: "file:///${NANO_OBJ}/down",
+	signature_type: "fingerprints",
+	fingerprints: "/usr/share/keys/pkg",
+	enabled: yes
+}
+EOF
+
+	pkg_cmd="${PKG_CMD:-pkg}"
+
+	pkg_cmd="${pkg_cmd} --rootdir ${NANO_WORLDDIR} --repo-conf-dir ${world_pkg_dir}
+		-o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes
+		-o ABI=${NANO_PKG_ABI} -o PKG_CACHEDIR=${pkg_cache}"
 
 	if [ -n "${NANO_METALOG}" ]; then
 		touch "${NANO_METALOG}"
@@ -739,26 +769,35 @@ EOF
 	fi
 
 	${pkg_cmd} update
+
 	selected=$(base_packages_list)
 	${pkg_cmd} install -U ${selected}
+	${pkg_cmd} triggers
 
-    # Update METALOG for locally generated databases (e.g. pkg sqlite)
-	tgt_dir var/db/pkg
-	tgt_touch var/db/pkg/local.sqlite
+	# Update METALOG for locally generated databases (e.g. pkg sqlite)
+	if [ -n "${have_local_repo}" ] && [ -n "${NANO_METALOG}" ]; then
+		tgt_dir var/db/pkg
+		tgt_touch var/db/pkg/local.sqlite
+	fi
+
+	if [ -n "${have_local_repo}" ]; then
+		pprint 2 "File system installed using hybrid mode (local + official packages)"
+	else
+		pprint 2 "File system installed using official packages"
+	fi
 
 	) >> "${log_file}" 2>&1
 }
 
 # Install from distribution sets (txz files)
 install_dist() {
-	local log_file base_url dist_dir pkg_list dist_arch
+	local log_file base_url dist_dir dist_arch
 
-	log_file="${NANO_LOG}/_.dist"
-	pprint 2 "Installing from distribution sets"
+	log_file="${NANO_LOG}/_.ip"
+	pprint 2 "Installing world and kernel from distribution sets"
 	pprint 3 "log: ${log_file}"
 
 	> "${log_file}" # Truncate log file
-	get_abi "${log_file}"
 
 	if [ -z "${NANO_VERSION}" ]; then
 		get_revision_branch
@@ -771,12 +810,11 @@ install_dist() {
 	fi
 
 	base_url="https://download.freebsd.org/snapshots/${dist_arch}/${NANO_VERSION}"
-	dist_dir="${NANO_OBJ}/_.dist"
+	dist_dir="${NANO_OBJ}/_.dist_files"
 
 	(
 	set -o xtrace
 
-	# Create distribution download directory
 	mkdir -p "${dist_dir}"
 
 	dist_list=$(base_packages_list "dist")
@@ -815,11 +853,10 @@ install_dist() {
 	# Remove tests directory (why??)
 	# rm -rf "${NANO_WORLDDIR}/usr/tests/"
 
-	pprint 2 "Distribution sets installed successfully"
+	pprint 2 "File system using distribution sets installed successfully"
 
 	) >> "${log_file}" 2>&1
 }
-
 
 native_xtools() {
 	pprint 2 "Installing the optimized native build tools for cross env"
