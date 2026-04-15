@@ -190,6 +190,9 @@ NANO_NOPKGBASE=""
 # to the arch of the current machine.
 NANO_ARCH=`uname -p`
 
+# Release version to build.
+NANO_RELEASE=""
+
 # CPUTYPE defaults to "" which is the default when CPUTYPE isn't
 # defined.
 NANO_CPUTYPE=""
@@ -483,10 +486,11 @@ install_kernel() {
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
-# Extract revision and branch from newvers.sh
-get_revision_branch() {
-	if [ -n "${NANO_VERSION}" ]; then
-		echo "${NANO_VERSION}"
+# Get the release version from the source tree.
+# This is used for both pkgbase and dist modes to determine which world/kernel to build and which packages to download.
+get_release() {
+	if [ -n "${NANO_RELEASE}" ]; then
+		echo "${NANO_RELEASE}"
 		return 0
 	fi
 	local revision branch final
@@ -500,7 +504,7 @@ get_revision_branch() {
 		final="${revision}"
 	fi
 
-	NANO_VERSION="${final}"
+	NANO_RELEASE="${final}"
 }
 
 # Map NANO_ARCH to the platform/arch format used by FreeBSD download URLs
@@ -520,7 +524,7 @@ get_arch_name() {
 
 # Get ABI from the target binary if source was built locally.
 get_abi() {
-	if [ -n "${NANO_PKG_ABI}" ]; then
+	if [ -n "${NANO_ABI}" ]; then
 		return 0
 	fi
 
@@ -550,28 +554,28 @@ get_abi() {
 		# Option 1: Try checking the cross-compiled target binary if source was built locally
 		if [ -n "${sh_file}" ]; then
 			echo "Checking built ${sh_file} binary for ABI"
-			NANO_PKG_ABI=$(${pkg_cmd} -o ABI_FILE="${sh_file}" config ABI 2>/dev/null || true)
+			NANO_ABI=$(${pkg_cmd} -o ABI_FILE="${sh_file}" config ABI 2>/dev/null || true)
 		fi
 
 		# Option 2: Hard-coded fallback
-		if [ -z "${NANO_PKG_ABI}" ]; then
+		if [ -z "${NANO_ABI}" ]; then
 			echo "Fallback: Synthesizing ABI from newvers.sh"
 			revision=$(awk -F'"' '/^REVISION=/{print $2}' "${NANO_SRC}/sys/conf/newvers.sh")
 			major_ver=$(echo "$revision" | cut -d. -f1)
-			NANO_PKG_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
+			NANO_ABI="FreeBSD:${major_ver}:${NANO_ARCH}"
 		fi
 
-		echo "Extracted Pkgbase ABI: ${NANO_PKG_ABI}"
+		echo "Extracted Pkgbase ABI: ${NANO_ABI}"
 	} >> "${log_file}" 2>&1
 
-	export NANO_PKG_ABI
+	export NANO_ABI
 }
 
 build_packages() {
 	local log_file repo_dir
 
     log_file="${MAKEOBJDIRPREFIX}/_.bp"
-	repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_PKG_ABI}/latest"
+	repo_dir="${MAKEOBJDIRPREFIX}/usr/src/repo/${NANO_ABI}/latest"
 
     > "${log_file}" # Truncate log file first to clear old runs
     get_abi "${log_file}"
@@ -681,7 +685,7 @@ base_packages_list() {
 
 # Install world and kernel via pkgbase
 install_pkgbase() {
-	local log_file world_pkg_dir pkg_cache pkg_cmd selected have_local_repo
+	local log_file repo_conf_dir pkg_cache pkg_cmd selected have_local_repo
 
 	log_file="${NANO_LOG}/_.ip"
 	> "${log_file}" # Truncate log file
@@ -694,9 +698,10 @@ install_pkgbase() {
 	set -o xtrace
 
 	# Setup directories
-	world_pkg_dir="${NANO_OBJ}/pkg"
-	pkg_cache="${NANO_OBJ}/pkg_cache"
-	mkdir -p "${world_pkg_dir}" "${pkg_cache}"
+	repo_conf_dir="${NANO_OBJ}/pkg_conf"
+	pkg_cache="${NANO_OBJ}/_.cache/pkgbase/${NANO_ABI}"
+
+	mkdir -p "${repo_conf_dir}" "${pkg_cache}"
 
 	# Install pkg trusted key for official repo verification
 	mkdir -p "${NANO_WORLDDIR}/usr/share/keys/pkg/trusted"
@@ -717,7 +722,7 @@ EOF
 	# Create repository configuration
 	# Priority: local repo first (if exists), then official repos
 	if [ -n "${have_local_repo}" ]; then
-		cat > "${world_pkg_dir}/local.conf" <<EOF
+		cat > "${repo_conf_dir}/local.conf" <<EOF
 local: {
 	url: "file:///${MAKEOBJDIRPREFIX}/usr/src/repo/\${ABI}/latest",
 	priority: 1
@@ -726,7 +731,7 @@ local: {
 EOF
 	fi
 
-	cat > "${world_pkg_dir}/FreeBSD-base.conf" <<EOF
+	cat > "${repo_conf_dir}/FreeBSD-base.conf" <<EOF
 FreeBSD-base: {
 	url: "pkg+https://pkg.freebsd.org/\${ABI}/base_latest",
 	mirror_type: "srv",
@@ -736,7 +741,7 @@ FreeBSD-base: {
 }
 EOF
 
-	cat > "${world_pkg_dir}/FreeBSD-ports.conf" <<EOF
+	cat > "${repo_conf_dir}/FreeBSD-ports.conf" <<EOF
 FreeBSD-ports: {
 	url: "pkg+https://pkg.freebsd.org/\${ABI}/latest",
 	mirror_type: "srv",
@@ -746,7 +751,7 @@ FreeBSD-ports: {
 }
 EOF
 
-	cat > "${world_pkg_dir}/FreeBSD-ports-kmods.conf" <<EOF
+	cat > "${repo_conf_dir}/FreeBSD-ports-kmods.conf" <<EOF
 FreeBSD-ports-kmods: {
 	url: "pkg+https://pkg.freebsd.org/\${ABI}/kmods_latest",
 	mirror_type: "srv",
@@ -759,9 +764,9 @@ EOF
 
 	pkg_cmd="${PKG_CMD:-pkg}"
 
-	pkg_cmd="${pkg_cmd} --rootdir ${NANO_WORLDDIR} --repo-conf-dir ${world_pkg_dir}
+	pkg_cmd="${pkg_cmd} --rootdir ${NANO_WORLDDIR} --repo-conf-dir ${repo_conf_dir}
 		-o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes
-		-o ABI=${NANO_PKG_ABI} -o PKG_CACHEDIR=${pkg_cache}"
+		-o ABI=${NANO_ABI} -o PKG_CACHEDIR=${pkg_cache}"
 
 	if [ -n "${NANO_METALOG}" ]; then
 		touch "${NANO_METALOG}"
@@ -791,7 +796,7 @@ EOF
 
 # Install from distribution sets (txz files)
 install_dist() {
-	local log_file base_url dist_dir dist_arch
+	local log_file base_url dist_dir dist_arch reldir
 
 	log_file="${NANO_LOG}/_.ip"
 	pprint 2 "Installing world and kernel from distribution sets"
@@ -799,18 +804,27 @@ install_dist() {
 
 	> "${log_file}" # Truncate log file
 
-	if [ -z "${NANO_VERSION}" ]; then
-		get_revision_branch
+	if [ -z "${NANO_RELEASE}" ]; then
+		get_release
 	fi
 	dist_arch=$(get_arch_name)
 
-	if [ -z "${NANO_VERSION}" ] || [ -z "${dist_arch}" ]; then
+	if [ -z "${NANO_RELEASE}" ] || [ -z "${dist_arch}" ]; then
 		echo "Error: Cannot resolve Version or Architecture for download!" 1>&2
 		exit 1
 	fi
 
-	base_url="https://download.freebsd.org/snapshots/${dist_arch}/${NANO_VERSION}"
-	dist_dir="${NANO_OBJ}/_.dist_files"
+	base_url="https://download.freebsd.org/snapshots/${dist_arch}/${NANO_RELEASE}"
+
+    case ${NANO_RELEASE} in
+        *-ALPHA*|*-CURRENT|*-STABLE|*-PRERELEASE)
+            reldir="snapshots"
+            ;;
+        *)
+            reldir="releases"
+            ;;
+    esac
+    dist_dir="${NANO_OBJ}/_.cache/dist/${reldir}/${dist_arch}/${NANO_RELEASE}"
 
 	(
 	set -o xtrace
