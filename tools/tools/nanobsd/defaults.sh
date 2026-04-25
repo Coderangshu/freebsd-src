@@ -434,10 +434,10 @@ nano_pkgbase_kernel_list() {
 }
 
 #
-# Update the sha256 value in the target pkg database.  All paths
-# are relative to NANO_WORLDDIR.
+# Update the sha256 value in the files table of the target pkg database.
+# All paths are relative to NANO_WORLDDIR
 #
-tgt_pkg_update_sha256() {
+tgt_pkg_update_file_sha256() {
 	local file sha256
 
 	file="${NANO_WORLDDIR}/${1}"
@@ -445,6 +445,25 @@ tgt_pkg_update_sha256() {
 	if [ -f "$file" ]; then
 		sha256=$(sha256 -q "${file}")
 		pkg_cmd shell "UPDATE files SET sha256 = '1\$${sha256}' WHERE path = '/${1}';"
+	else
+		err "File ${file} not found"
+	fi
+}
+
+#
+# Update the content value in the config_files table of the target pkg database.
+# All paths are relative to NANO_WORLDDIR
+#
+tgt_pkg_update_config_files_content() {
+	local escaped_file file
+
+	file="${NANO_WORLDDIR}/${1}"
+	# We need to escape single quotes and avoid $(...) from removing newlines at EOF
+	escaped_file=$(sed "s/'/''/g" "$file"; printf 'EOF')
+	escaped_file=${escaped_file%EOF}
+
+	if [ -f "$file" ]; then
+		pkg_cmd shell "UPDATE config_files SET content = '$escaped_file' WHERE path = '/${1}';"
 	else
 		err "File ${file} not found"
 	fi
@@ -1053,7 +1072,7 @@ setup_nanobsd_etc() {
 	} >> boot/defaults/loader.conf
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 444 boot/defaults/loader.conf
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg_update_sha256 boot/defaults/loader.conf
+		tgt_pkg_update_file_sha256 boot/defaults/loader.conf
 	fi
 
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 666 etc/defaults/rc.conf
@@ -1079,6 +1098,10 @@ EOF
 		err "Regular expression pattern not found"
 	fi
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 444 etc/defaults/rc.conf
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_update_file_sha256 etc/defaults/rc.conf
+		tgt_pkg_update_config_files_content etc/defaults/rc.conf
+	fi
 
 	# save config file for scripts
 	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
