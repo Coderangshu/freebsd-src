@@ -207,6 +207,9 @@ if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
 	nano_configure_pkgbase_pkg
 else
 	nano_fetch_distsets
+	if ! $do_root; then
+		nano_distset_metalog
+	fi
 fi
 
 if $do_installworld ; then

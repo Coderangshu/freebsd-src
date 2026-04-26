@@ -350,5 +350,8 @@ _create_diskimage() {
 	    ${dataimage} \
 	    -o ${IMG}
 
+	rm -f "${NANO_OBJ}/_.altroot.image" \
+	    "${NANO_OBJ}/_.cfg.part"\
+	    "${NANO_OBJ}/_.data.part"
 	) > ${NANO_LOG}/_.di 2>&1
 }

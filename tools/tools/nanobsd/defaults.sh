@@ -345,11 +345,24 @@ patch_precompiled() {
 	    -e 's,sysctl -n kern.bootfile,echo /boot/kernel/kernel,' \
 	    -e 's,service sshd restart,#service sshd restart,' \
 	    /usr/sbin/freebsd-update > "${fu_bin}"
+	if ! $do_root; then
+		# Patch freebsd-update(8) to avoid checking if the user is root
+		# and setting ownership/permissions on install(1)
+		# while keeping the INDEX-NEW file, which will be appended to
+		# the metalog once it is converted to mtree(8) format
+		sed -i "" \
+		    -e 's/\[ `id -u` != 0 \]/false/g' \
+		    -e 's/-o ${OWNER} -g ${group}/-U/g' \
+		    -e 's/-m ${PERM}//g' \
+		    -e "s,fetch_inspect_system INDEX-OLD INDEX-PRESENT INDEX-NEW || return 1,cp INDEX-NEW ${NANO_METALOG}.pds; fetch_inspect_system INDEX-OLD INDEX-PRESENT INDEX-NEW || return 1,g" \
+		    "${fu_bin}"
+	fi
 	FREEBSD_UPDATE="env PAGER=/bin/cat"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} /bin/sh ${fu_bin}"
 	fu_basedir="${NANO_WORLDDIR}"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} -b ${fu_basedir}"
-	fu_workdir="${NANO_WORLDDIR}/var/db/freebsd-update"
+	fu_workdir="${NANO_OBJ}/_.cache/freebsd-update"
+	mkdir -p "$fu_workdir"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} -d ${fu_workdir}"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} --currently-running ${NANO_REVISION}-${NANO_BRANCH}"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} -f ${NANO_WORLDDIR}/etc/freebsd-update.conf"
@@ -358,32 +371,58 @@ patch_precompiled() {
 		yes | ${FREEBSD_UPDATE} install
 	fi
 
+	if ! $do_root && [ -f "${NANO_METALOG}.pds" ]; then
+		# Convert our copy of INDEX-NEW from freebsd-update
+		# to an mtree(8) format and append it to the metalog
+		${NANO_TOOLS}/freebsd-update-index-to-mtree.awk \
+		    "${NANO_METALOG}.pds" >> "$NANO_METALOG"
+		rm -f "${NANO_METALOG}.pds"
+	fi
+
 	set -o xtrace
 
 	# Remove old kernel
-	rm -rf "${NANO_WORLDDIR}/boot/kernel.old"
-	# Remove freebsd-update(8) database files
-	rm -rf "${NANO_WORLDDIR}"/var/db/freebsd-update/*
+	tgt_rm boot/kernel.old
 	# Remove etcupdate(8) database
-	rm -rf "${NANO_WORLDDIR}/var/db/etcupdate"
+	tgt_rm var/db/etcupdate
 
 	# XXXJL This should be fixed in base.txz
+	# XXX Extra directory in 15.0-RELEASE base.txz
+	tgt_rm usr/share/pkg
 	# Remove debug files present in base.txz
-	! nano_distributions_contains "-dbg.txz " && rm -rf "${NANO_WORLDDIR}/usr/lib/debug"
+	if ! nano_distributions_contains "-dbg.txz "; then
+		tgt_rm usr/lib/debug
+	fi
 	# Remove lib32 files present in base.txz
 	if ! nano_distributions_contains " lib32"; then
-		chflags -R noschg "${NANO_WORLDDIR}/libexec/ld-elf32.so.1"
-		rm -f "${NANO_WORLDDIR}/libexec/ld-elf32.so.1"
-		rm -f "${NANO_WORLDDIR}/usr/bin/ldd32"
-		rm -f "${NANO_WORLDDIR}/usr/libexec/ld-elf32.so.1"
+		tgt_rm libexec/ld-elf32.so.1
+		tgt_rm usr/bin/ldd32
+		tgt_rm usr/libexec/ld-elf32.so.1
 	fi
 	# Remove test files present in base.txz
 	if ! nano_distributions_contains " tests.txz "; then
-		rm -rf "${NANO_WORLDDIR}"/usr/tests/*
-		rm -f "${NANO_WORLDDIR}/usr/lib/libxo/encoder/test.enc"
-		rm -f "${NANO_WORLDDIR}/usr/share/man/man7/tests.7.gz"
+		tgt_rm usr/tests
+		tgt_rm usr/lib/libxo/encoder/test.enc
+		tgt_rm usr/share/man/man7/tests.7.gz
 	fi
 	) > "${NANO_LOG}/_.pds" 2>&1
+}
+
+#
+# Generate the METALOG from the distribution tarballs
+#
+nano_distset_metalog() {
+	rm -f "$NANO_METALOG"
+
+	for distset in $NANO_DISTRIBUTIONS; do
+		tar -cf - --format=mtree \
+		    --options='!uid,!gid,!nlink,!size,!time' \
+		    @"$(nano_distset_dir)/${distset}" \
+		    2>/dev/null >> "$NANO_METALOG"
+	done
+
+	# XXX account for a bug in libarchive, where the first entry is "/."
+	sed -i "" -e 's|^/\. |\. |' "$NANO_METALOG"
 }
 
 #######################################################################
@@ -675,6 +714,21 @@ tgt_dir() {
 				echo ".${path} type=dir uname=${NANO_DEF_UNAME}" \
 				    "gname=${NANO_DEF_GNAME} mode=0755" >> "${NANO_METALOG}"
 			done
+		fi
+	done
+}
+
+#
+# Remove files or directories in the target tree, and record the fact.
+# All paths are relative to NANO_WORLDDIR
+#
+tgt_rm() {
+	for i; do
+		chflags -Rf 0 "${NANO_WORLDDIR}/${i}" || true
+		rm -rf "${NANO_WORLDDIR:?}/${i}"
+
+		if [ -n "$NANO_METALOG" ]; then
+			sed -i "" -e "\|^\./${i}|d" "$NANO_METALOG"
 		fi
 	done
 }
@@ -1120,11 +1174,13 @@ EOF
 
 prune_usr() {
 	# Remove all empty directories in /usr
-	find "${NANO_WORLDDIR}"/usr -type d -depth -print |
-		while read d
-		do
-			rmdir $d > /dev/null 2>&1 || true
-		done
+	find "${NANO_WORLDDIR}/usr" -type d -depth -empty |
+	    while read -r d; do
+		rmdir "$d" > /dev/null 2>&1 || true
+		if [ -n "$NANO_METALOG" ]; then
+			sed -i "" -e "\|^\.${d#"$NANO_WORLDDIR"}|d" "$NANO_METALOG"
+		fi
+	done
 }
 
 newfs_part() {
