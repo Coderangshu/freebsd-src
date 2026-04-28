@@ -500,12 +500,17 @@ nano_pkg_repos_dir() {
 	echo "${NANO_OBJ}/_.pkg"
 }
 
+#
+# Install all valid pkg repo fingerprints
+#
 nano_freebsd_pkg_repo_keys() {
-	mkdir -p "${NANO_WORLDDIR}/usr/share/keys/pkg/trusted"
-	cat > "${NANO_WORLDDIR}/usr/share/keys/pkg/trusted/pkg.freebsd.org.2013102301" <<EOF
-function: "sha256"
-fingerprint: "b0170035af3acc5f3f3ae1859dc717101b4e6c1d0a794ad554928ca0cbb2f438"
-EOF
+	# XXXJL
+	#${NANO_MAKE} -C "${NANO_SRC}/share/keys" DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes install #NO_ROOT
+	(
+	cd "${NANO_SRC}/share/keys"
+	find . ! -name "Makefile*" |
+	    cpio ${CPIO_SYMLINK} -dumpv "${NANO_WORLDDIR}/usr/share/keys"
+	)
 }
 
 # XXXJL wait until we have the full picture to determine the best way to
@@ -513,14 +518,6 @@ EOF
 # -RELEASE or -CURRENT (release pkg uses an AWS KMS signature with a backup
 # signing key).  Account for when our own packages, signed by us or unsigned,
 # are generated.
-
-#fingerprints: "/usr/share/keys/pkgbase-${VERSION_MAJOR}"
-# awskms-15
-#function: "sha256"
-#fingerprint: "1d7b45d20fa8d6ed26f9b4a13ac81a6b5df860b9fe644d07b87e92298ba72595"
-# backup-signing-15
-#function: "sha256"
-#fingerprint: "56a77bdcb6c3cf7984729c6138bd5617c24aa0d466b3b604c96205b2c5629f3c"
 nano_pkg_repo_conf() {
 	mkdir -p "$(nano_pkg_repos_dir)"
 	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
