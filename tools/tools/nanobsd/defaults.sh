@@ -472,6 +472,10 @@ nano_pkgbase_kernel_list() {
 	echo "$list"
 }
 
+nano_pkgbase_reset_metalog() {
+	rm -f "$NANO_METALOG"
+}
+
 #
 # Update the sha256 value in the files table of the target pkg database.
 # All paths are relative to NANO_WORLDDIR
@@ -512,15 +516,24 @@ tgt_pkg_update_config_files_content() {
 # XXXJL NANO_ABI needs a sanity check? (NANO_ARCH + NANO_OSVERSION)
 # XXXJL passing both OSVERSION and IGNORE_OSVERSION is oxymoronic
 pkg_cmd() {
+	local install_as_user
+
+	if ! $do_root; then
+		install_as_user="-o INSTALL_AS_USER=yes"
+	fi
+
 	pkg --rootdir "$NANO_WORLDDIR" \
 	    --repo-conf-dir "$(nano_pkg_repos_dir)" \
 	    -o ABI="$NANO_ABI" \
 	    -o ASSUME_ALWAYS_YES=yes \
 	    -o IGNORE_OSVERSION=yes \
 	    -o OSVERSION="$NANO_OSVERSION" \
-	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" "$@"
+	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" \
+	    ${install_as_user} "$@"
 }
 
+# XXXJL chroot?
+# pkg: chroot failed: Operation not permitted (security.bsd.unprivileged_chroot sysctl not enabled))
 pkg_chroot_cmd() {
 	pkg --chroot "$NANO_WORLDDIR" \
 	    --repo-conf-dir "$(nano_pkg_repos_dir)" \
@@ -611,6 +624,69 @@ nano_configure_pkgbase_pkg() {
 	) > "${NANO_LOG}/_.cp" 2>&1
 }
 
+_xxx_get_untagged_directories_from_mtree() {
+	local mtree="$1"
+	local base_dir="$2"
+
+	cat "${NANO_SRC}/etc/mtree/${mtree}" |
+	    mtree -C -K uname,gname,tags | grep -v tags |
+	    sed -e "s|^\.|\.${base_dir}|g" >> "$NANO_METALOG"
+}
+
+nano_pkg_metalog() {
+	local files directories path
+
+	# XXXJL mtree: ./boot/dtb/arm: missing directory in specification
+	#       These directories are missing from BSD.root.dist, however
+	#       I do not want to add them to the mtree.  These must exist
+	#       only for arm/arm64
+	tgt_dir boot/dtb/arm
+	tgt_dir boot/dtb/freescale
+	tgt_dir boot/dtb/marvell
+	tgt_dir boot/dtb/nvidia
+	tgt_dir boot/dtb/qcom
+
+	# XXXJL ideally there should be a way for pkg to output mtree/plist to a file when installing as non-root
+	echo ". type=dir uname=${NANO_DEF_UNAME}" \
+	    "gname=${NANO_DEF_GNAME} mode=0755" >> "$NANO_METALOG"
+
+	# XXX Paths missing from the package manifest will default to
+	# root:wheel with 0755 permissions
+	directories=$(pkg_cmd query "%Sp")
+	for path in $directories; do
+		path="${path#/}"
+		mtree_walk "$path"
+	done
+	files=$(pkg_cmd query "%Fp")
+	for file in $files; do
+		file="${file#/}"
+		path="${file%/*}"
+		mtree_walk "$path"
+	done
+
+	# XXX These directories do not have a package tag in their mtree yet
+	_xxx_get_untagged_directories_from_mtree BSD.usr.dist /usr
+
+	pkg_cmd query ".%Sp type=dir uname=%Su gname=%Sg mode=%Sm flags=%Sf" >> "$NANO_METALOG"
+	pkg_cmd query ".%Fp type=file uname=%Fu gname=%Fg mode=%Fm flags=%Ff link=%Ft" >> "$NANO_METALOG"
+	sed -i "" -e 's/ flags=-//g' -e 's/ link=$//g' "$NANO_METALOG"
+	sed -i "" -e '/ link=/s/ type=file/ type=link/g' "$NANO_METALOG"
+	echo "./tmp type=link uname=root gname=wheel mode=1777 link=var/tmp" >> "$NANO_METALOG"
+
+	# XXXJL this is from setup_nanobsd(), when it runs, the NANO_METALOG has no entries yes
+	# so we must execute it again here without sorting, so the right mode/permissions stay last.
+	for d in var etc; do
+		grep "^.\/${d}\/" "${NANO_METALOG}" |
+		    sed -e "s=^./${d}=./conf/base/${d}=g" >> "${NANO_METALOG}.conf"
+	done
+	cat "${NANO_METALOG}.conf" >> "${NANO_METALOG}"
+	rm -f "${NANO_METALOG}.conf"
+
+	# XXX This package needs to be regenerated (ask someone, but try locally first)
+	# (FreeBSD-bootloader-dev)
+	sed -i "" -e 's|\./usr/share/man/man3/libsa\.3\.gz type=file uname= gname= mode=0|\./usr/share/man/man3/libsa\.3\.gz type=file uname=root gname=wheel mode=444|g' "$NANO_METALOG"
+}
+
 #######################################################################
 #
 # The functions which do the real work.
@@ -675,6 +751,18 @@ tgt_touch() (
 )
 
 #
+# Update the path the files table of the target pkg database from
+# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
+#
+tgt_pkg_update_file_path_etc_local() {
+	pkg_cmd shell <<-EOF
+		UPDATE files
+		SET path = '/etc/local' || SUBSTR(path, 15)
+		WHERE path LIKE '/usr/local/etc%';
+	EOF
+}
+
+#
 # Convert a directory into a symlink. Takes three arguments, the current
 # directory, what it should become a symlink to, and optionally, the mode.
 # The directory is removed and a symlink is created. If we're doing
@@ -686,7 +774,14 @@ tgt_dir2symlink() (
 	local mode=${3:-0777}
 
 	cd "${NANO_WORLDDIR}"
+
 	rm -xrf "$dir"
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		pkg_cmd shell <<-EOF
+			DELETE FROM directories WHERE path = '$dir';
+		EOF
+	fi
+
 	ln -sf "$symlink" "$dir"
 	chmod "$mode" "$dir"
 	if $do_root; then
@@ -696,6 +791,12 @@ tgt_dir2symlink() (
 		echo "./${dir} type=link" \
 		    "uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" \
 		    "mode=${mode} link=${symlink}" >> ${NANO_METALOG}
+	fi
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		pkg_cmd shell <<-EOF
+			INSERT INTO files (path, uname, gname, perm, fflags, symlink_target)
+			VALUES ('$dir', '$NANO_DEF_UNAME', '$NANO_DEF_GNAME', '$mode', 0, '$symlink');
+		EOF
 	fi
 )
 
@@ -708,14 +809,29 @@ tgt_dir() {
 		mkdir -p "${NANO_WORLDDIR}/${i}"
 
 		if [ -n "$NANO_METALOG" ]; then
-			path=""
-			for dir in $(echo "$i" | tr "/" " "); do
-				path="${path}/${dir}"
-				echo ".${path} type=dir uname=${NANO_DEF_UNAME}" \
-				    "gname=${NANO_DEF_GNAME} mode=0755" >> "${NANO_METALOG}"
-			done
+			mtree_walk "$i"
 		fi
 	done
+}
+
+#
+# Generate metalog entries for each intermediate directory in a path.
+# Assume default ownership and directory permissions
+#
+mtree_walk() {
+	local dir oifs path
+
+	dir="$1"
+	path=""
+
+	oifs="$IFS"
+	IFS="/"
+	for d in $dir; do
+		path="${path}/${d}"
+		echo ".${path} type=dir uname=${NANO_DEF_UNAME}" \
+		    "gname=${NANO_DEF_GNAME} mode=0755" >> "${NANO_METALOG}"
+	done
+	IFS="$oifs"
 }
 
 #
@@ -877,7 +993,12 @@ install_precompiled_world() {
 		if [ -n "$(nano_pkgbase_world_list)" ]; then
 			pkg_cmd install -U -y $(nano_pkgbase_world_list)
 		fi
-		pkg_chroot_cmd triggers # XXXJL chroot?
+		# XXXJL pkg triggers should not need a chroot (lua script)
+		if ! $do_root; then
+			pkg_cmd triggers
+		else
+			pkg_chroot_cmd triggers
+		fi
 	else
 		for distset in $NANO_DISTRIBUTIONS; do
 			if [ "$distset" = "kernel.txz" ] || \
@@ -1038,6 +1159,11 @@ fixup_before_diskimage() {
 	# The dedup tool's output must be sorted due to limitations in awk.
 	if [ -n "${NANO_METALOG}" ]; then
 		pprint 2 "Fixing metalog"
+
+		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+			nano_pkg_metalog
+		fi
+
 		cp ${NANO_METALOG} ${NANO_METALOG}.pre
 		echo "/set uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" > ${NANO_METALOG}
 		cat ${NANO_METALOG}.pre | ${NANO_TOOLS}/mtree-dedup.awk | \
@@ -1062,6 +1188,9 @@ setup_nanobsd() {
 		cd ..
 		rm -xrf etc
 		)
+		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+			tgt_pkg_update_file_path_etc_local
+		fi
 	fi
 
 	# Always setup the usr/local/etc -> etc/local symlink.
