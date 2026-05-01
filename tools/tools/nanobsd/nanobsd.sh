@@ -238,9 +238,12 @@ else
 	pprint 2 "Skipping installkernel (as instructed)"
 fi
 
-if $do_precompiled && [ -n "$NANO_NOPKGBASE" ] && \
-    ($do_installworld || $do_installkernel) ; then
-	patch_precompiled
+if $do_precompiled && ($do_installworld || $do_installkernel) ; then
+	if [ -n "$NANO_NOPKGBASE" ]; then
+		patch_precompiled
+#	elif [ -n "${NANO_NOPRIV_BUILD}" ]; then # XXX
+#		generate_pkg_metalog
+	fi
 fi
 
 if $do_prep_image ; then

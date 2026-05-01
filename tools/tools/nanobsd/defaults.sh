@@ -664,12 +664,11 @@ tgt_dir() {
 
 tgt_rm() {
 	for i; do
-		chflags -R 0 "${NANO_WORLDDIR}/${i}" 2>/dev/null
+		chflags -fR 0 "${NANO_WORLDDIR}/${i}" || true
 		rm -rf "${NANO_WORLDDIR}/${i}"
 
 		if [ -n "$NANO_METALOG" ]; then
-			LC_ALL=C grep -v "^./${i}" "$NANO_METALOG" > "${NANO_METALOG}.tmp" &&
-			    mv "${NANO_METALOG}.tmp" "$NANO_METALOG"
+            sed -i "" -e "\|^\./${i}|d" "$NANO_METALOG"
 		fi
 	done
 }
@@ -762,7 +761,7 @@ clean_world() {
 	if [ "${NANO_OBJ}" != "${MAKEOBJDIRPREFIX}" ]; then
 		pprint 2 "Clean and create object directory (${NANO_OBJ})"
 		if ! rm -xrf ${NANO_OBJ}/ > /dev/null 2>&1 ; then
-			[ -z "${NANO_NOPRIV_BUILD}" ] && chflags -R noschg ${NANO_OBJ}
+			chflags -R noschg ${NANO_OBJ}
 			rm -xr ${NANO_OBJ}/
 		fi
 		mkdir -p "${NANO_OBJ}" "${NANO_WORLDDIR}"
@@ -897,7 +896,7 @@ install_precompiled_kernel() {
 		fi
 		if nano_distributions_contains " kernel-dbg.txz " &&
 		    [ -f "$(nano_distset_dir)/kernel-dbg.txz" ]; then
-			if [ -n "${NANO_NOPRIV_BUILD}" ] && [ -n "${NANO_METALOG}" ]; then
+			if ! $do_root; then
 				tgt_dir usr/lib/debug/boot/kernel
 				tar -cf - --format=mtree @"$(nano_distset_dir)/kernel-dbg.txz" 2>/dev/null >> "${NANO_METALOG}"
 			fi
