@@ -652,6 +652,10 @@ tgt_dir2symlink() (
 	cd "${NANO_WORLDDIR}"
 	rm -xrf "$dir"
 	ln -sf "$symlink" "$dir"
+	chmod "$mode" "$dir"
+	if $do_root; then
+		chmod -h "$mode" "$dir"
+	fi
 	if [ -n "$NANO_METALOG" ]; then
 		echo "./${dir} type=link" \
 		    "uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" \
