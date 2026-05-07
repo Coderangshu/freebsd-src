@@ -1210,7 +1210,7 @@ setup_nanobsd() {
 		if [ -n "$NANO_METALOG" ]; then
 			grep "^.\/${d}\/" "${NANO_METALOG}" |
 			    sed -e "s=^./${d}=./conf/base/${d}=g" |
-			    sort | uniq >> "${NANO_METALOG}.conf"
+			    sort -u >> "${NANO_METALOG}.conf"
 		fi
 	done
 
@@ -1568,7 +1568,7 @@ cust_pkgng() {
 	(
 		# Expand any glob characters in package list
 		cd "${NANO_PACKAGE_DIR}"
-		_PKGS=`find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort | uniq`
+		_PKGS=`find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort -u`
 
 		# Show todo
 		todo=`echo "$_PKGS" | wc -l`
