@@ -743,9 +743,8 @@ tgt_touch() (
 	for i; do
 		touch $i
 		if [ -n "$NANO_METALOG" ]; then
-			echo "./${i} type=file" \
-			    "uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" \
-			    "mode=0644" >> "${NANO_METALOG}"
+			printf "./%s type=file uname=%s gname=%s mode=0644\n" \
+			    "$i" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$NANO_METALOG"
 		fi
 	done
 )
@@ -788,9 +787,9 @@ tgt_dir2symlink() (
 		chmod -h "$mode" "$dir"
 	fi
 	if [ -n "$NANO_METALOG" ]; then
-		echo "./${dir} type=link" \
-		    "uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" \
-		    "mode=${mode} link=${symlink}" >> ${NANO_METALOG}
+		printf "./%s type=link uname=%s gname=%s mode=%s link=%s\n" \
+		    "$dir" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" \
+		    "$symlink" >> "$NANO_METALOG"
 	fi
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
 		pkg_cmd shell <<-EOF
@@ -828,8 +827,8 @@ mtree_walk() {
 	IFS="/"
 	for d in $dir; do
 		path="${path}/${d}"
-		echo ".${path} type=dir uname=${NANO_DEF_UNAME}" \
-		    "gname=${NANO_DEF_GNAME} mode=0755" >> "${NANO_METALOG}"
+		printf ".%s type=dir uname=%s gname=%s mode=0755\n" \
+		    "$path" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$NANO_METALOG"
 	done
 	IFS="$oifs"
 }
