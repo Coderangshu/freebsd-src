@@ -859,8 +859,7 @@ tgt_switch_root_fstab()
 	current="$1"
 	new="$2"
 
-	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab
-	do
+	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
 		sed -i "" "s=${NANO_DRIVE}${current}=${NANO_DRIVE}${new}=g" "${f}"
 	done
 }
@@ -1096,8 +1095,7 @@ native_xtools() {
 #
 run_early_customize() {
 	pprint 2 "run early customize scripts"
-	for c in $NANO_EARLY_CUSTOMIZE
-	do
+	for c in $NANO_EARLY_CUSTOMIZE; do
 		pprint 2 "early customize \"$c\""
 		pprint 3 "log: ${NANO_LOG}/_.early_cust.$c"
 		pprint 4 "`type $c`"
@@ -1117,8 +1115,7 @@ run_early_customize() {
 run_customize() {
 
 	pprint 2 "run customize scripts"
-	for c in $NANO_CUSTOMIZE
-	do
+	for c in $NANO_CUSTOMIZE; do
 		pprint 2 "customize \"$c\""
 		pprint 3 "log: ${NANO_LOG}/_.cust.$c"
 		pprint 4 "`type $c`"
@@ -1132,8 +1129,7 @@ run_customize() {
 #
 run_late_customize() {
 	pprint 2 "run late customize scripts"
-	for c in $NANO_LATE_CUSTOMIZE
-	do
+	for c in $NANO_LATE_CUSTOMIZE; do
 		pprint 2 "late customize \"$c\""
 		pprint 3 "log: ${NANO_LOG}/_.late_cust.$c"
 		pprint 4 "`type $c`"
@@ -1200,8 +1196,7 @@ setup_nanobsd() {
 	# to have the symlink in error though.
 	tgt_dir2symlink usr/local/etc ../../etc/local 0755
 
-	for d in var etc
-	do
+	for d in var etc; do
 		# link /$d under /conf
 		# we use hard links so we have them both places.
 		# the files in /$d will be hidden by the mount.
