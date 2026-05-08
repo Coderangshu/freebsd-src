@@ -1301,7 +1301,7 @@ prune_usr() {
 	    while read -r d; do
 		rmdir "$d" > /dev/null 2>&1 || true
 		if [ -n "$NANO_METALOG" ]; then
-			sed -i "" -e "\|^\.${d#"$NANO_WORLDDIR"}|d" "$NANO_METALOG"
+			sed -i "" -e "\|^\.${d#"$NANO_WORLDDIR"} |d" "$NANO_METALOG"
 		fi
 	done
 }
