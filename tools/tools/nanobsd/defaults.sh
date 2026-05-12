@@ -673,6 +673,51 @@ nano_pkg_metalog() {
 	sed -i "" -e '/ link=/s/ type=file/ type=link/g' "$NANO_METALOG"
 	echo "./tmp type=link uname=root gname=wheel mode=1777 link=var/tmp" >> "$NANO_METALOG"
 
+	# XXX Manually adding these files which are not in any pkg manifest so pkg_cmd query misses them
+    # Repopulate the passwd db
+	if [ -f "${NANO_WORLDDIR}/etc/master.passwd" ]; then
+		/usr/sbin/pwd_mkdb -d "${NANO_WORLDDIR}/etc" \
+		    "${NANO_WORLDDIR}/etc/master.passwd" 2>/dev/null || true
+	fi
+    # Add the passwd db files to the metalog with the right permissions
+	for dbs in etc/pwd.db etc/spwd.db etc/passwd; do
+		[ -f "${NANO_WORLDDIR}/${dbs}" ] || continue
+		case "${dbs##*/}" in
+		spwd.db) _mode=0600 ;;
+		*)       _mode=0644 ;;
+		esac
+		printf './%s type=file uname=root gname=wheel mode=%s\n' \
+		    "${dbs}" "${_mode}" >> "$NANO_METALOG"
+	done
+	# Repopulate the capabilities db
+	if [ -f "${NANO_WORLDDIR}/etc/login.conf" ]; then
+		cap_mkdb "${NANO_WORLDDIR}/etc/login.conf" 2>/dev/null || true
+	fi
+    # Add the capabilities db to the metalog
+	[ -f "${NANO_WORLDDIR}/etc/login.conf.db" ] && \
+	    printf './etc/login.conf.db type=file uname=root gname=wheel mode=0644\n' \
+	    >> "$NANO_METALOG"
+	# Repopulate the services db
+	if [ -f "${NANO_WORLDDIR}/etc/services" ]; then
+		services_mkdb -q -o "${NANO_WORLDDIR}/var/db/services.db" \
+		    "${NANO_WORLDDIR}/" 2>/dev/null || true
+	fi
+    # Add the services db to the metalog
+	[ -f "${NANO_WORLDDIR}/var/db/services.db" ] && \
+	    printf './var/db/services.db type=file uname=root gname=wheel mode=0644\n' \
+	    >> "$NANO_METALOG"
+	[ -f "${NANO_WORLDDIR}/etc/ssl/cert.pem" ] && \
+	    printf './etc/ssl/cert.pem type=file uname=root gname=wheel mode=0444\n' \
+	    >> "$NANO_METALOG"
+    # Repopulate mandoc dbs and add to metalog
+	for mandir in usr/share/man usr/share/openssl/man; do
+		[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
+		makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
+		[ -f "${NANO_WORLDDIR}/${mandir}/mandoc.db" ] && \
+		    printf './%s/mandoc.db type=file uname=root gname=wheel mode=0644\n' \
+		    "${mandir}" >> "$NANO_METALOG"
+	done
+
 	# XXXJL this is from setup_nanobsd(), when it runs, the NANO_METALOG has no entries yes
 	# so we must execute it again here without sorting, so the right mode/permissions stay last.
 	for d in var etc; do
