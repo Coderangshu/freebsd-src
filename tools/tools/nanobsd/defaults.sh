@@ -888,7 +888,7 @@ tgt_rm() {
 		rm -rf "${NANO_WORLDDIR:?}/${i}"
 
 		if [ -n "$NANO_METALOG" ]; then
-			sed -i "" -e "\|^\./${i}|d" "$NANO_METALOG"
+			sed -i "" -e "\|^\./${i}/|d" -e "\|^\./${i} |d" "$NANO_METALOG"
 		fi
 	done
 }
