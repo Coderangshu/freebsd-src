@@ -107,32 +107,35 @@ NANO_LATE_CUSTOMIZE=""
 
 # Newfs parameters to use
 NANO_NEWFS="-b 4096 -f 512 -i 8192 -U"
-NANO_MAKEFS="-o bsize=4096,density=8192,fsize=512,softupdates=1,version=2"
+NANO_MAKEFS="-o softupdates=1,version=2"
 
 # The drive name of the media at runtime
 NANO_DRIVE=ada0
 
-# Target media size in 512 bytes sectors
+# Sector size (ssize) in bytes for partition alignment
+# accepts suffix (4K, 1M, etc.)
+NANO_SECTOR_SIZE=512
+
+# Target media size in ssize
 NANO_MEDIASIZE=4000000
+
+# Logical disk sector size in bytes passed to makefs via -S
+NANO_UFS_SECTOR_SIZE=512
 
 # Number of code images on media (1 or 2)
 NANO_IMAGES=2
 
-# 0 -> Leave second image all zeroes so it compresses better.
+# 0 -> Leave second image all zeroes so it compresses better
 # 1 -> Initialize second image with a copy of the first
 NANO_INIT_IMG2=1
 
-# Size of code file system in 512 bytes sectors.
-# If zero, size will be as large as possible
+# Size of code file system in ssize (0 = auto)
 NANO_CODESIZE=0
 
-# Size of configuration file system in 512 bytes sectors.
-# Cannot be zero
+# Size of configuration file system in ssize (0 not allowed)
 NANO_CONFSIZE=2048
 
-# Size of data file system in 512 bytes sectors.
-# If zero: no partition configured.
-# If negative: max size possible
+# Size of data file system in ssize (0 = none, negative = max)
 NANO_DATASIZE=0
 
 # Size of the /etc ramdisk in 512 bytes sectors
@@ -148,6 +151,19 @@ NANO_BOOTLOADER="boot/boot0sio"
 # boot2 flags/options
 # default force serial console
 NANO_BOOT2CFG="-h -S115200"
+
+# Partition scheme:
+# 0 = MBR/BIOS
+# 1 = GPT
+NANO_USE_GPT=0
+
+#
+# When NANO_USE_GPT=1
+# Space-separated list of boot types; options: BIOS, UEFI (case-insensitive).
+# Default enables both. Use "BIOS" or "UEFI" alone for single-mode.
+#
+NANO_BOOT_TYPE="BIOS UEFI"
+NANO_EFI_BOOTPART_SIZE=260m   # EFI System Partition size
 
 # Backing type of md(4) device
 # Can be "file" or "swap"
@@ -659,6 +675,35 @@ nano_fetch_pkgbase_packages() {
 	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
+#
+# Convert a human-readable size string with a suffix (b/k/m/g/t/w) into bytes
+# Also accepts "x"-delimited products followed by a suffix (e.g., "2x1024x1024K")
+# Input: $1 = size string (e.g., "512m", "2x1024x1024k")
+# Output: prints byte count
+#
+strsuftoll() {
+	local num result unit
+
+	num=${1%?}
+	unit=${1#"${num}"}
+
+	case "$unit" in
+	[bB]) result="${num}x512" ;;
+	[kK]) result="${num}x1024" ;;
+	[mM]) result="${num}x1024x1024" ;;
+	[gG]) result="${num}x1024x1024x1024" ;;
+	[tT]) result="${num}x1024x1024x1024x1024" ;;
+	[wW]) result="${num}x4" ;; # sizeof(int)
+	[0-9]) result="$1" ;;
+	*)
+		printf "%s\n" "'$1': illegal number"
+		exit 1
+		;;
+	esac
+
+	printf "%s" "$(echo "scale=0; $result" | tr 'x' '*' | bc)"
+}
+
 #######################################################################
 #
 # The functions which do the real work.
@@ -1165,6 +1210,19 @@ fixup_before_diskimage() {
 }
 
 #
+# Write etc/nanobsd.conf (NANO_DRIVE) and etc/fstab with the correct root and cfg
+# partition device paths
+#
+setup_nanobsd_write_confs() {
+	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
+	tgt_touch etc/nanobsd.conf
+
+	printf '/dev/%s\t/\tufs\tro\t1\t1\n' "${NANO_DRIVE}${NANO_ROOT}" > etc/fstab
+	printf '/dev/%s\t/cfg\tufs\trw,noauto\t2\t2\n' "${NANO_DRIVE}${NANO_SLICE_CFG}" >> etc/fstab
+	tgt_touch etc/fstab
+}
+
+#
 # Relocate /usr/local/etc to /etc/local,
 # hard-links /etc and /var into /conf/base,
 # set ramdisk sizes, and symlinks /tmp to /var/tmp
@@ -1296,13 +1354,8 @@ EOF
 		tgt_pkg_update_config_files_content etc/defaults/rc.conf
 	fi
 
-	# Save config file for scripts
-	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
-	tgt_touch etc/nanobsd.conf
-
-	echo "/dev/${NANO_DRIVE}${NANO_ROOT} / ufs ro 1 1" > etc/fstab
-	echo "/dev/${NANO_DRIVE}${NANO_SLICE_CFG} /cfg ufs rw,noauto 2 2" >> etc/fstab
-	tgt_touch etc/fstab
+	# save config file for scripts
+	setup_nanobsd_write_confs
 	tgt_dir cfg
 
 	# Create directory for eventual /usr/local/etc contents
@@ -1351,8 +1404,8 @@ nano_makefs() {
 	image=$4
 	dir=$5
 
-	makefs -t ffs ${options} -F "${metalog}" -N "${NANO_WORLDDIR}/etc" \
-	    -R "${size}b" -T "${NANO_TIMESTAMP}" "${image}" "${dir}"
+    makefs -t ffs -S "${NANO_UFS_SECTOR_SIZE}" ${options} -F "${metalog}" \
+        -N "${NANO_WORLDDIR}/etc" -s "${size}b" -T "${NANO_TIMESTAMP}" "${image}" "${dir}"
 }
 
 #
@@ -1397,7 +1450,7 @@ _populate_part() {
 	fs=$2
 	dir=$3
 	lbl=$4
-	size=$5
+    size=$(( $5 * NANO_SECTOR_SIZE / 512 ))
 	metalog=$6
 
 	echo "Creating ${fs}"
@@ -1793,6 +1846,11 @@ set_defaults_and_export() {
 	NANO_MAKE_CONF_BUILD=${MAKEOBJDIRPREFIX}/make.conf.build
 	NANO_MAKE_CONF_INSTALL=${NANO_OBJ}/make.conf.install
 
+	# Normalize to bytes
+	NANO_SECTOR_SIZE=$(strsuftoll "${NANO_SECTOR_SIZE}")
+	NANO_UFS_SECTOR_SIZE=$(strsuftoll "${NANO_UFS_SECTOR_SIZE}")
+	NANO_EFI_BOOTPART_SIZE=$(strsuftoll "${NANO_EFI_BOOTPART_SIZE}")
+
 	# Override user's NANO_DRIVE if they specified a NANO_LABEL
 	[ -n "${NANO_LABEL}" ] && NANO_DRIVE="ufs/${NANO_LABEL}" || true
 
@@ -1835,7 +1893,12 @@ set_defaults_and_export() {
 	export_var NANO_WORLDDIR
 	export_var NANO_BOOT0CFG
 	export_var NANO_BOOTLOADER
+	export_var NANO_BOOT_TYPE
+	export_var NANO_EFI_BOOTPART_SIZE
 	export_var NANO_LABEL
+	export_var NANO_USE_GPT
+	export_var NANO_SECTOR_SIZE
+	export_var NANO_UFS_SECTOR_SIZE
 	export_var NANO_MODULES
 	export_var NANO_NOPRIV_BUILD
 	export_var NANO_METALOG
