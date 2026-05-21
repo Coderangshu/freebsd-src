@@ -170,6 +170,10 @@ fi
 exec 3>&1
 set_defaults_and_export
 
+if [ "${NANO_USE_GPT}" -ne 0 ]; then
+	. "${NANO_TOOLS}/gpt.sh"
+fi
+
 if [ ! -d "${NANO_TOOLS}" ]; then
 	echo "NANO_TOOLS directory does not exist" 1>&2
 	exit 1
