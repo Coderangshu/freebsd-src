@@ -34,6 +34,7 @@
 # Functions and variable definitions used by the legacy nanobsd
 # image building system.
 
+# Calculate MBR partition layout (start offset, size, index) from media/image/code/conf/data sizes
 calculate_partitioning() {
 	echo $NANO_MEDIASIZE $NANO_IMAGES \
 		$NANO_SECTS $NANO_HEADS \
@@ -92,6 +93,10 @@ calculate_partitioning() {
 	' > ${NANO_LOG}/_.partitioning
 }
 
+#
+# Round a sector count down to the nearest 32768-sector boundary
+# Input: $1 = code size in bytes
+#
 _xxx_adjust_code_size()
 {
 	# XXX adjust the CODE_SIZE value by rounding it up to
@@ -103,6 +108,10 @@ _xxx_adjust_code_size()
 	echo $(( ((codesize + (bsize - 1)) / bsize) * bsize ))
 }
 
+#
+# Create a BSD-labeled root code partition image using mdconfig/gpart,
+# populate it from NANO_WORLDDIR, and write _.disk.image
+#
 create_code_slice() {
 	pprint 2 "build code slice"
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
@@ -155,6 +164,8 @@ create_code_slice() {
 	) > ${NANO_OBJ}/_.cs 2>&1
 }
 
+# Create the root UFS partition image using makefs then wrap it in a BSD slice with mkimg
+# nopriv-build variant
 _create_code_slice() {
 	pprint 2 "build code slice"
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
@@ -183,6 +194,8 @@ _create_code_slice() {
 	) > ${NANO_OBJ}/_.cs 2>&1
 }
 
+# Assemble a full MBR disk image using mdconfig and gpart,
+# write all partitions (root, altroot, cfg, data) via live mounts
 create_diskimage() {
 	pprint 2 "build diskimage"
 	pprint 3 "log: ${NANO_OBJ}/_.di"
@@ -283,6 +296,8 @@ create_diskimage() {
 	) > ${NANO_LOG}/_.di 2>&1
 }
 
+# Assemble the final MBR disk image from pre-built partition images using mkimg
+# nopriv-build variant
 _create_diskimage() {
 	pprint 2 "build diskimage"
 	pprint 3 "log: ${NANO_OBJ}/_.di"
