@@ -137,6 +137,10 @@ NANO_RAM_ETCSIZE=10240
 # Size of the /tmp+/var ramdisk in 512 bytes sectors
 NANO_RAM_TMPVARSIZE=10240
 
+# Size of swap partition in bytes
+# XXXJL strsuftoll() before exporting
+NANO_SWAP_SIZE=0
+
 # boot0 flags/options and configuration
 NANO_BOOT0CFG="-o packet -s 1 -m 3"
 NANO_BOOTLOADER="boot/boot0sio"
@@ -1321,6 +1325,9 @@ setup_nanobsd() {
 	# Put /tmp on the /var ramdisk (could be symlink already)
 	tgt_dir2symlink tmp var/tmp 1777
 
+	# Make sure that firstboot scripts run so growfs works
+	tgt_touch firstboot
+
 	) > ${NANO_LOG}/_.dl 2>&1
 }
 
@@ -1366,6 +1373,8 @@ entropy_boot_file="NO"	# Disable very early (used at early boot time)
 entropy_file="NO"	# Disable late (used when going multi-user)
 			# entropy through reboots.
 entropy_dir="NO"	# Disable caching entropy via cron.
+growfs_enable="YES"	# Attempt to grow the root filesystem on boot.
+growfs_swap_size="${NANO_SWAP_SIZE}"	# Size in bytes to specify swap size.
 
 ##############################################################
 .
