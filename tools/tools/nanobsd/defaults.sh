@@ -138,10 +138,10 @@ NANO_CONFSIZE=2048
 # Size of data file system in ssize (0 = none, negative = max)
 NANO_DATASIZE=0
 
-# Size of the /etc ramdisk in 512 bytes sectors
+# Size of the /etc ramdisk in ssize
 NANO_RAM_ETCSIZE=10240
 
-# Size of the /tmp+/var ramdisk in 512 bytes sectors
+# Size of the /tmp+/var ramdisk in ssize
 NANO_RAM_TMPVARSIZE=10240
 
 # boot0 flags/options and configuration
@@ -164,6 +164,7 @@ NANO_USE_GPT=0
 #
 NANO_BOOT_TYPE="BIOS UEFI"
 NANO_EFI_BOOTPART_SIZE=260m   # EFI System Partition size
+NANO_SWAPSIZE=0               # swap partition in ssize (0 = none)
 
 # Backing type of md(4) device
 # Can be "file" or "swap"
@@ -872,8 +873,7 @@ tgt_rm() {
 # Switch the current root partition in the target file system tab.
 # Input: $1 = current root partition, $2 = new root partition
 #
-tgt_switch_root_fstab()
-{
+tgt_switch_root_fstab() {
 	local current new
 	current="$1"
 	new="$2"
@@ -1214,12 +1214,15 @@ fixup_before_diskimage() {
 # partition device paths
 #
 setup_nanobsd_write_confs() {
+	(
+	cd "${NANO_WORLDDIR}"
 	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
 	tgt_touch etc/nanobsd.conf
 
 	printf '/dev/%s\t/\tufs\tro\t1\t1\n' "${NANO_DRIVE}${NANO_ROOT}" > etc/fstab
 	printf '/dev/%s\t/cfg\tufs\trw,noauto\t2\t2\n' "${NANO_DRIVE}${NANO_SLICE_CFG}" >> etc/fstab
 	tgt_touch etc/fstab
+	)
 }
 
 #
@@ -1895,6 +1898,7 @@ set_defaults_and_export() {
 	export_var NANO_BOOTLOADER
 	export_var NANO_BOOT_TYPE
 	export_var NANO_EFI_BOOTPART_SIZE
+	export_var NANO_SWAPSIZE
 	export_var NANO_LABEL
 	export_var NANO_USE_GPT
 	export_var NANO_SECTOR_SIZE

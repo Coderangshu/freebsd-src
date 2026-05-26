@@ -36,22 +36,27 @@
 #   [freebsd-ufs/${NANO_NAME}1]   root A (read-only)
 #   [freebsd-ufs/${NANO_NAME}2]   root B (read-only, A/B updates)
 #   [freebsd-ufs/cfg]             configuration partition
+#   [freebsd-swap/swap0]          swap partition (optional)
 #   [freebsd-ufs/data]            data partition (optional)
 #
 # "UEFI":
 #   [efi/efiboot0]                FAT
+#   [efi/efiboot1]                FAT (A/B updates)
 #   [freebsd-ufs/${NANO_NAME}1]   root A (read-only)
 #   [freebsd-ufs/${NANO_NAME}2]   root B (read-only, A/B updates)
 #   [freebsd-ufs/cfg]             configuration partition
+#   [freebsd-swap/swap0]          swap partition (optional)
 #   [freebsd-ufs/data]            data partition (optional)
 #
 # "BIOS UEFI" (default):
 #   [PMBR boot code]              /boot/pmbr
 #   [efi/efiboot0]                FAT
+#   [efi/efiboot1]                FAT (A/B updates)
 #   [freebsd-boot]                /boot/gptboot
 #   [freebsd-ufs/${NANO_NAME}1]   root A (read-only)
 #   [freebsd-ufs/${NANO_NAME}2]   root B (read-only, A/B updates)
 #   [freebsd-ufs/cfg]             configuration partition
+#   [freebsd-swap/swap0]          swap partition (optional)
 #   [freebsd-ufs/data]            data partition (optional)
 
 NANO_DRIVE="gpt"
@@ -87,6 +92,8 @@ nano_boot_type_is() {
 
 # GPT override: write nanobsd.conf with NANO_DRIVE=gpt/NAME and fstab using GPT partition labels
 setup_nanobsd_write_confs() {
+	(
+	cd "${NANO_WORLDDIR}"
 	printf 'NANO_DRIVE=gpt/%s\n' "${NANO_NAME}" > etc/nanobsd.conf
 	tgt_touch etc/nanobsd.conf
 
@@ -97,21 +104,27 @@ setup_nanobsd_write_confs() {
             printf "${FSTAB_FMT}" "/dev/gpt/efiboot0" "/boot/efi" "msdosfs" "rw,noauto" "2" "2"
         fi
         printf "${FSTAB_FMT}" "/dev/gpt/cfg" "/cfg" "ufs" "rw,noauto" "2" "2"
+        if [ "${NANO_SWAPSIZE}" -ne 0 ]; then
+            printf "${FSTAB_FMT}" "/dev/gpt/swap0" "none" "swap" "sw" "0" "0"
+        fi
 	} | column -t -s $'\t' > etc/fstab
 	tgt_touch etc/fstab
+	)
 }
 
 
 #
 # Create a FAT EFI System Partition image file
 # Input: $1 = output file path, $2 = size in bytes, $3 = path to loader.efi
+#        $4 = active root GPT label (e.g. "gpt/nanobsd1")
 #
 make_esp_file() {
-	local file fat_size loader fat_type efibootname espdir
+	local file fat_size loader fat_type efibootname espdir active_root
 	local FAT16MIN FAT32MIN
 	file=$1
 	fat_size=$2
 	loader=$3
+	active_root=$4
 
 	FAT16MIN=2150400
 	FAT32MIN=34091008
@@ -124,132 +137,141 @@ make_esp_file() {
 		fat_type=12
 	fi
 
-	espdir="${NANO_LOG}/_.efi"
+	espdir=$(mktemp -d /tmp/nanobsd-esp.XXXXXX)
 	mkdir -p "${espdir}/EFI/BOOT"
-    # get_uefi_bootname from "src/tools/boot/install-boot.sh"
-	efibootname=$(get_uefi_bootname) 
+	mkdir -p "${espdir}/EFI/FreeBSD"
+	# get_uefi_bootname from "src/tools/boot/install-boot.sh"
+	efibootname=$(get_uefi_bootname)
 	cp -p "${loader}" "${espdir}/EFI/BOOT/${efibootname}.efi"
-	if [ -d "${espdir}" ]; then
-        makefs -t msdos \
-            -o fat_type="${fat_type}" \
-            -o sectors_per_cluster=1 \
-            -o volume_label=EFISYS \
-            -o OEM_string="" \
-            -s "${fat_size}" \
-            "${file}" "${espdir}"
+	if [ -n "${active_root}" ]; then
+		printf 'vfs.root.mountfrom=ufs:/dev/%s\n' "${active_root}" \
+		    > "${espdir}/EFI/FreeBSD/loader.env"
 	fi
+	makefs -t msdos \
+	    -o fat_type="${fat_type}" \
+	    -o sectors_per_cluster=1 \
+	    -o volume_label=EFISYS \
+	    -o OEM_string="" \
+	    -s "${fat_size}" \
+	    "${file}" "${espdir}"
+	rm -rf "${espdir}"
 }
 
 #
 # Calculate partition sizes using LBA alignment
-# All sizes and offsets are in ssize sectors
-# Params: $1=MEDIASIZE(sectors) $2=IMAGES $3=SSIZE(bytes) $4=HAS_PMBR
-#         $5=CODESIZE(sectors)  $6=CONFSIZE(sectors) $7=DATASIZE(sectors)
-#         $8=EFI_SIZE(bytes)   $9=BOOT_TYPE
+# All sizes are in sectors (normalized by set_defaults_and_export)
+# Params: $1=MEDIASIZE(sectors) $2=IMAGES $3=SSIZE(bytes) $4=CODESIZE(sectors)
+#         $5=CONFSIZE(sectors) $6=DATASIZE(sectors) $7=bios(0/1)
+#         $8=ESP_SECTS(sectors) $9=SWAPSIZE(sectors) $10=IMAGENAME
 #
 calculate_partitioning() {
-	local _pmbr=0 _has_uefi=0 _has_bios=0
-	[ -f "${NANO_WORLDDIR}/boot/pmbr" ] && _pmbr=1
-	nano_boot_type_is uefi && _has_uefi=1
-	nano_boot_type_is bios && _has_bios=1
+	local boot_type=0 esp_sects=0 name="${NANO_NAME}"
+
+	nano_boot_type_is BIOS && boot_type=1
+	nano_boot_type_is UEFI && esp_sects=$(( NANO_EFI_BOOTPART_SIZE / NANO_SECTOR_SIZE ))
 
 	echo $NANO_MEDIASIZE $NANO_IMAGES \
-		${NANO_SECTOR_SIZE} $_pmbr \
-		$NANO_CODESIZE $NANO_CONFSIZE $NANO_DATASIZE \
-		${NANO_EFI_BOOTPART_SIZE} $_has_uefi $_has_bios |
-	awk '
+		$NANO_SECTOR_SIZE $NANO_CODESIZE \
+		$NANO_CONFSIZE $NANO_DATASIZE \
+		$boot_type $esp_sects $NANO_SWAPSIZE $name |
+
+		awk '
+	function roundup(sects) {
+		return int((sects + align_sects - 1) / align_sects) * align_sects
+	}
+
+	function print_line(sects, type, label) {
+		print start_sect, sects, i, type "/" label
+		start_sect += sects
+		avail_sects -= sects
+		i++
+	}
+
 	{
 		ssize = $3
 
-		# GPT partition entry array: 128 entries x 128 bytes = 16384 bytes
-		pe_sects = 16384 / ssize
+		# Align to 1 MiB boundary in sectors (min 1 MiB when ssize >= 1 MiB)
+		align_sects = int((1024 * 1024) / ssize)
+		if (align_sects < 1) align_sects = 1024 * 1024
 
-		# GPT end: backup partition entries + backup GPT header
-		gpt_end_sects = pe_sects + 1
+		# GPT backup metadata at the end of the disk in sectors
+		# (128 entries x 128 bytes + 1 backup header sector)
+		gpt_end_sects = int(16384 / ssize) + 1
 
-		# ESP size in sectors, placed at the 1 MiB alignment boundary
-		if ($9) {
-			esp_sects = int($8 / ssize)
-		} else {
-			esp_sects = 0
-		}
+		esp_sects  = ($8  > 0) ? roundup($8)  : 0
+		cfg_sects  = roundup($5)
+		swap_sects = ($9  > 0) ? roundup($9)  : 0
+		data_sects = ($6  > 0) ? roundup($6)  : $6
 
-		# Align to the 1 MiB boundary
-		align_start_sects = int((1024 * 1024 + ssize - 1) / ssize)
-
-        # Reserve 1 MiB of physical space for the BIOS boot partition (gptboot)
-        if ($10) {
-            bios_sects = int(1024 * 1024 / ssize)
-        } else {
-            bios_sects = 0
-        }
-
-        # Code partition(s) start after ESP (or at align_start_sects when no ESP)
-		code_start_sects = align_start_sects + esp_sects + bios_sects
-
-		# Usable sectors for code/cfg/data partitions
-		usable_sects = $1 - code_start_sects - gpt_end_sects
-
-		# Config and data partition sizes (inputs already in sectors)
-		config_slice_sects = $6
-		if ($7 > 0) {
-			data_slice_sects = $7
-		} else {
-			data_slice_sects = 0
-		}
-
-		# Image partition size in sectors, rounded down to 1 MiB boundary
-		if ($5 == 0) {
-			raw_slice_sects = int((usable_sects - data_slice_sects - config_slice_sects) / $2)
-		} else {
-            raw_slice_sects = $5
-		}
-        image_slice_sects = int(raw_slice_sects / align_start_sects) * align_start_sects
-
-		# Partition index counter
 		i = 1
+		start_sect = align_sects
+		avail_sects = $1 - start_sect - gpt_end_sects
 
-		# ESP partition (if applicable)
+		# BIOS boot partition marker (no size: placed by mkimg at 1 MiB)
+		if ($7 == 1) {
+			print "-", "-", i, "freebsd-boot/boot0"
+			i++
+		}
+
+		# Primary ESP
 		if (esp_sects > 0) {
-			print align_start_sects, esp_sects, i
-			i++
+			print_line(esp_sects, "efi", "efiboot0")
 		}
 
-        # freebsd-boot (BIOS) occupies one GPT slot (not tracked here)
-		if ($10) {
-			i++
+		# Secondary ESP (A/B EFI, when NANO_IMAGES > 1)
+		if (esp_sects > 0 && $2 > 1) {
+			print_line(esp_sects, "efi", "efiboot1")
 		}
 
-		# First image partition
-		print code_start_sects, image_slice_sects, i
-		used_sects = code_start_sects + image_slice_sects
-		i++
+		# Code partition size in sectors
+		code_sects = $4
+		if (code_sects == 0) {
+			# Divide remaining space evenly across images (rounded down)
+			total_code_sects = avail_sects - cfg_sects - swap_sects - \
+				((data_sects > 0) ? data_sects : 0)
+			total_code_sects = int(total_code_sects / align_sects) * align_sects
+			code_sects = int((total_code_sects / $2) / align_sects) * align_sects
+		} else {
+			# Rounded up to alignment
+			code_sects = roundup(code_sects)
+		}
 
-		# Second image partition (if any)
+		print_line(code_sects, "freebsd-ufs", $10 "1")
+
 		if ($2 > 1) {
-			print used_sects, image_slice_sects, i
-			used_sects += image_slice_sects
-			i++
+			print_line(code_sects, "freebsd-ufs", $10 "2")
 		}
 
-		# Config partition
-		print used_sects, config_slice_sects, i
-		used_sects += config_slice_sects
-		i++
+		print_line(cfg_sects, "freebsd-ufs", "cfg")
 
-        # Data partition (if any)
-		total_usable_sects = code_start_sects + usable_sects
-		if ($7 > 0) {
-			print used_sects, data_slice_sects, i
-		} else if ($7 < 0 && total_usable_sects > used_sects) {
-			print used_sects, total_usable_sects - used_sects, i
-		} else if (total_usable_sects < used_sects) {
+		if (swap_sects > 0) {
+			print_line(swap_sects, "freebsd-swap", "swap0")
+		}
+
+		if (data_sects > 0) {
+			print_line(data_sects, "freebsd-ufs", "data")
+		} else if (data_sects < 0 && avail_sects > 0) {
+			print_line(avail_sects, "freebsd-ufs", "data")
+		}
+
+		if (avail_sects < 0) {
 			print "Disk space overcommitted by", \
-			    used_sects - total_usable_sects, "blocks" > "/dev/stderr"
+				(avail_sects * -1), "sectors" > "/dev/stderr"
 			exit 2
 		}
-	}
-	' > ${NANO_LOG}/_.partitioning
+	}' > ${NANO_LOG}/_.partitioning
+}
+
+# Return the line number in _.partitioning of the first code partition.
+# Lines 1..N are: optional BIOS marker, optional ESP(s), then code partitions.
+partitioning_code1_line() {
+	local line=1
+	nano_boot_type_is BIOS && line=$(( line + 1 ))
+	if nano_boot_type_is UEFI; then
+		line=$(( line + 1 ))
+		[ "${NANO_IMAGES}" -gt 1 ] && line=$(( line + 1 ))
+	fi
+	echo $line
 }
 
 # Create the raw UFS root partition image using makefs
@@ -258,18 +280,13 @@ _create_code_slice() {
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
 
 	(
-	local code1_line code_sects code_bytes aligned_bytes makefs_sectors
+	local code1_line code_sects code_bytes makefs_sectors
 
-	if nano_boot_type_is UEFI; then
-		code1_line=2
-	else
-		code1_line=1
-	fi
+	code1_line=$(partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
     code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
-	aligned_bytes=$(_xxx_adjust_code_size "${code_bytes}")
-	makefs_sectors=$(( aligned_bytes / 512 ))
+	makefs_sectors=$(( code_bytes / 512 ))
 
 	echo "Writing code image..."
 	nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
@@ -289,20 +306,16 @@ _create_diskimage() {
 	pprint 3 "log: ${NANO_OBJ}/_.di"
 
 	(
-	local altroot cfgimage dataimage espfile espopts pmbr gptboot img code1_line code_sects \
-        code_bytes aligned_bytes makefs_sects first_start_bytes cfg_line cfg_sects \
-        data_line data_sects
+	local altroot cfgimage dataimage swapimage espfile espopts espfile2 espopts2 \
+        pmbr gptboot img code1_line code_sects \
+        code_bytes makefs_sects first_start_bytes cfg_line cfg_sects \
+        swap_line swap_sects swap_bytes data_line data_sects
 
-	if nano_boot_type_is UEFI; then
-		code1_line=2
-	else
-		code1_line=1
-	fi
+	code1_line=$(partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
     code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
-	aligned_bytes=$(_xxx_adjust_code_size "${code_bytes}")
-	makefs_sectors=$(( aligned_bytes / 512 ))
+	makefs_sectors=$(( code_bytes / 512 ))
 
     # Always start from 1MiB boundary
     first_start_bytes=$(( ((1024 * 1024 + NANO_SECTOR_SIZE - 1) / NANO_SECTOR_SIZE) * NANO_SECTOR_SIZE ))
@@ -311,15 +324,26 @@ _create_diskimage() {
 
 	espfile=""
 	espopts=""
+	espfile2=""
+	espopts2=""
 	pmbr=""
 	gptboot=""
+	swapimage=""
 
-	# EFI System Partition — for UEFI
+	# EFI System Partition(s) — for UEFI
 	if nano_boot_type_is UEFI; then
 		espfile=$(mktemp /tmp/nanobsd-efi.XXXXXX)
 		make_esp_file "${espfile}" "${NANO_EFI_BOOTPART_SIZE}" \
-		    "${NANO_WORLDDIR}/boot/loader.efi"
+		    "${NANO_WORLDDIR}/boot/loader.efi" \
+		    "gpt/${NANO_NAME}1"
 		espopts="-p efi/efiboot0:=${espfile}:${first_start_bytes}"
+		if [ "${NANO_IMAGES}" -gt 1 ]; then
+			espfile2=$(mktemp /tmp/nanobsd-efi2.XXXXXX)
+			make_esp_file "${espfile2}" "${NANO_EFI_BOOTPART_SIZE}" \
+			    "${NANO_WORLDDIR}/boot/loader.efi" \
+			    "gpt/${NANO_NAME}2"
+			espopts2="-p efi/efiboot1:=${espfile2}"
+		fi
 	fi
 
 	# PMBR + freebsd-boot — for BIOS
@@ -351,13 +375,23 @@ _create_diskimage() {
 		altroot="-p freebsd-ufs/${NANO_NAME}2::$code_bytes"
 	fi
 
-	# cfg/data sizes in _.partitioning are in NANO_SECTOR_SIZE units,
+	# cfg/swap/data sizes in _.partitioning are in NANO_SECTOR_SIZE units,
 	# _populate_*_part expects 512-byte blocks for nano_makefs
 	cfg_line=$(( code1_line + NANO_IMAGES ))
 	cfg_sects=$(awk "NR==${cfg_line} {print \$2}" "${NANO_LOG}/_.partitioning")
 	_populate_cfg_part "${NANO_OBJ}/_.cfg.part" "${NANO_CFGDIR}" \
 	    "${NANO_SLICE_CFG}" "${cfg_sects}" "${NANO_METALOG_CFG}"
 	cfgimage="-p freebsd-ufs/cfg:=${NANO_OBJ}/_.cfg.part"
+
+	if [ "${NANO_SWAPSIZE}" -ne 0 ]; then
+		swap_line=$(( cfg_line + 1 ))
+		swap_sects=$(awk "NR==${swap_line} {print \$2}" "${NANO_LOG}/_.partitioning")
+		swap_bytes=$(( swap_sects * NANO_SECTOR_SIZE ))
+		swapimage="-p freebsd-swap/swap0::${swap_bytes}"
+		data_line=$(( cfg_line + 2 ))
+	else
+		data_line=$(( cfg_line + 1 ))
+	fi
 
 	if [ -n "${NANO_SLICE_DATA}" ] &&
 	    [ "${NANO_SLICE_CFG}" = "${NANO_SLICE_DATA}" ] &&
@@ -366,7 +400,6 @@ _create_diskimage() {
 		exit 2
 	fi
 	if [ "${NANO_DATASIZE}" -ne 0 ] && [ -n "${NANO_SLICE_DATA}" ]; then
-		data_line=$(( code1_line + NANO_IMAGES + 1 ))
 		data_sects=$(awk "NR==${data_line} {print \$2}" "${NANO_LOG}/_.partitioning")
 		_populate_data_part "${NANO_OBJ}/_.data.part" "${NANO_DATADIR}" \
 		    "${NANO_SLICE_DATA}" "${data_sects}" "${NANO_METALOG_DATA}"
@@ -377,14 +410,17 @@ _create_diskimage() {
 	mkimg -s gpt -P "${NANO_SECTOR_SIZE}" -C "$((NANO_MEDIASIZE * NANO_SECTOR_SIZE))" \
 	    ${pmbr} \
 	    ${espopts} \
+	    ${espopts2} \
 	    ${gptboot} \
 	    -p "freebsd-ufs/${NANO_NAME}1:=${NANO_DISKIMGDIR}/_.disk.image" \
 	    ${altroot} \
 	    ${cfgimage} \
+	    ${swapimage} \
 	    ${dataimage} \
 	    -o "${img}"
 
 	[ -n "${espfile}" ] && rm -f "${espfile}"
+	[ -n "${espfile2}" ] && rm -f "${espfile2}"
 	rm -f "${NANO_OBJ}/_.altroot.part" \
 	    "${NANO_OBJ}/_.cfg.part" \
 	    "${NANO_OBJ}/_.data.part"
