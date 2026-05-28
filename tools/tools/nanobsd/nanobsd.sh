@@ -208,16 +208,29 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
-if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-	nano_fetch_pkgbase_packages
-	if ! $do_root; then
-		nano_pkgbase_reset_metalog
+if ! $do_precompiled && ( $do_world || $do_kernel ) ; then
+	build_packages
+else
+	pprint 2 "Skipping build packages (as no buildworld/buildkernel)"
+fi
+
+if $do_precompiled ; then
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		nano_fetch_pkgbase_packages
+        if ! $do_root; then
+            nano_pkgbase_reset_metalog
+        fi
+	else
+		nano_fetch_distsets
+        if ! $do_root; then
+            nano_distset_metalog
+        fi
 	fi
 else
-	nano_fetch_distsets
-	if ! $do_root; then
-		nano_distset_metalog
-	fi
+	nano_fetch_local_packages
+    if ! $do_root; then
+        nano_pkgbase_reset_metalog
+    fi
 fi
 
 if $do_installworld; then
@@ -225,9 +238,7 @@ if $do_installworld; then
 	if $do_precompiled; then
 		install_precompiled_world
 	else
-		make_conf_install
 		install_world
-		install_etc
 	fi
 else
 	pprint 2 "Skipping installworld (as instructed)"
@@ -265,13 +276,13 @@ else
 fi
 if $do_code; then
 	calculate_partitioning
-	if [ -z "${NANO_NOPRIV_BUILD}" ]; then
+	if [ "${NANO_USE_GPT}" -ne 0 ] || [ -z "${NANO_NOPRIV_BUILD}" ]; then
 		create_code_slice
 	else
 		_create_code_slice
 	fi
-	if $do_image; then
-		if [ -z "${NANO_NOPRIV_BUILD}" ]; then
+	if $do_image ; then
+		if [ "${NANO_USE_GPT}" -ne 0 ] || [ -z "${NANO_NOPRIV_BUILD}" ]; then
 			create_diskimage
 		else
 			_create_diskimage

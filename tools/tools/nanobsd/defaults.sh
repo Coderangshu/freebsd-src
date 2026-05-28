@@ -469,7 +469,11 @@ nano_pkgbase_list() {
 	target="$1"
 	list=""
 
-	[ "$target" = "world" ] || [ -z "$target" ] && list="pkg"
+	# For precompiled builds, pkg comes from the online FreeBSD-ports repo and is
+	# installed explicitly.  For local source builds, host pkg is used to install
+	# world and kernel, so no standalone pkg package is needed (or available)
+	# in the local repo.
+	$do_precompiled && { [ "$target" = "world" ] || [ -z "$target" ]; } && list="pkg"
 
 	for package in $NANO_PKGBASE_LIST; do
 		case "$package" in
@@ -479,7 +483,7 @@ nano_pkgbase_list() {
 			;;
 		*)
 			{ [ "$target" = "world" ] || [ -z "$target" ]; } &&
-			list="${list}${list:+ }$package"
+			list="${list:+$list }$package"
 			;;
 		esac
 	done
@@ -587,6 +591,33 @@ nano_pkg_cachedir() {
 	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
 }
 
+# Return the directory where pkg repository configuration files are written for the build.
+nano_pkg_repos_dir() {
+	echo "${NANO_OBJ}/_.pkg"
+}
+
+# Return the directory where "make packages" places locally built pkgbase packages
+nano_local_pkgbase_repodir() {
+	echo "${NANO_OBJ}${NANO_SRC}/repo"
+}
+
+# Write the pkg repository config for locally built pkgbase packages
+nano_local_pkgbase_repo_conf() {
+	local repodir
+	repodir=$(nano_local_pkgbase_repodir)
+	mkdir -p "$(nano_pkg_repos_dir)"
+	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
+FreeBSD-ports: {
+  enabled: no
+}
+FreeBSD-base: {
+  url: "file://${repodir}/\${ABI}/latest",
+  signature_type: "none",
+  enabled: yes
+}
+EOF
+}
+
 # Copy FreeBSD pkg signing key fingerprints from the source tree
 nano_pkg_freebsd_repo_keys() {
 	(
@@ -594,11 +625,6 @@ nano_pkg_freebsd_repo_keys() {
 	find . ! -name "Makefile*" |
 	    cpio ${CPIO_SYMLINK} -dumpv "${NANO_WORLDDIR}/usr/share/keys"
 	)
-}
-
-# Return the directory of package repository configuration files
-nano_pkg_repos_dir() {
-	echo "${NANO_OBJ}/_.pkg"
 }
 
 # Generate a FreeBSD.conf package repository configuration file
@@ -638,6 +664,19 @@ nano_pkg_repo() {
 	pkg_cmd repo "$(nano_pkg_cachedir)"
 }
 
+nano_validate_pkgbase_list() {
+	if [ -z "$NANO_PKGBASE_LIST" ]; then
+		err "NANO_PKGBASE_LIST variable is not set"
+	fi
+
+	nano_pkgbase_list_contains " FreeBSD-set-base " ||
+	    nano_pkgbase_list_contains " FreeBSD-set-minimal " ||
+	    err "FreeBSD-set-base or FreeBSD-set-minimal is mandatory"
+
+	nano_pkgbase_list_contains " FreeBSD-kernel-" ||
+	    err "A FreeBSD-kernel package is mandatory"
+}
+
 #
 # Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache,
 # write the pkg repo config, and fetch pkgbase packages
@@ -651,16 +690,7 @@ nano_fetch_pkgbase_packages() {
 	fi
 
 	(
-	if [ -z "$NANO_PKGBASE_LIST" ]; then
-		err "NANO_PKGBASE_LIST variable is not set"
-	fi
-
-	nano_pkgbase_list_contains " FreeBSD-set-base " ||
-	    nano_pkgbase_list_contains " FreeBSD-set-minimal " ||
-	    err "FreeBSD-set-base or FreeBSD-set-minimal is mandatory"
-
-	nano_pkgbase_list_contains " FreeBSD-kernel-" ||
-	    err "A FreeBSD-kernel package is mandatory"
+	nano_validate_pkgbase_list
 
 	if $do_clean; then
 		rm -rf "${NANO_OBJ}/_.cache"
@@ -673,6 +703,26 @@ nano_fetch_pkgbase_packages() {
 	else
 		pprint 2 "Using existing packages (as instructed)"
 	fi
+	) > "${NANO_LOG}/_.pkgbase" 2>&1
+}
+
+# Validate NANO_PKGBASE_LIST requirements and configure local pkg repo
+nano_fetch_local_packages() {
+	pprint 2 "configure pkg"
+	pprint 3 "log: ${NANO_LOG}/_.pkgbase"
+
+	if [ ! -d "$NANO_LOG" ]; then
+		mkdir -p "$NANO_LOG"
+	fi
+
+	(
+	nano_validate_pkgbase_list
+
+	if [ ! -d "$(nano_pkg_cachedir)" ]; then
+		mkdir -p "$(nano_pkg_cachedir)"
+	fi
+
+	nano_local_pkgbase_repo_conf
 	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
@@ -801,6 +851,7 @@ tgt_dir2symlink() (
 		EOF
 	fi
 
+	mkdir -p "$(dirname "$dir")"
 	ln -sf "$symlink" "$dir"
 	chmod "$mode" "$dir"
 	if $do_root; then
@@ -958,6 +1009,19 @@ build_kernel() {
 	) > ${MAKEOBJDIRPREFIX}/_.bk 2>&1
 }
 
+# Run "make packages" using the build make.conf to produce pkgbase packages from built world/kernel
+build_packages() {
+	pprint 2 "build packages"
+	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bp"
+
+	(
+	nano_make_build_env
+	set -o xtrace
+	cd "${NANO_SRC}"
+	${NANO_PMAKE} packages
+	) > ${MAKEOBJDIRPREFIX}/_.bp 2>&1
+}
+
 # Remove and recreate NANO_OBJ or just NANO_WORLDDIR
 clean_world() {
 	if [ "${NANO_OBJ}" != "${MAKEOBJDIRPREFIX}" ]; then
@@ -978,7 +1042,11 @@ clean_world() {
 	fi
 }
 
+# XXXAS: no longer called — source builds use pkg install, not make installworld
+#
 # Construct install make.conf (NANO_MAKE_CONF_INSTALL)
+# Create the install-phase make.conf by combining global, world-wide, and install-specific settings
+#
 make_conf_install() {
 	pprint 2 "Construct install make.conf ($NANO_MAKE_CONF_INSTALL)"
 
@@ -1001,11 +1069,18 @@ install_world() {
 	pprint 3 "log: ${NANO_LOG}/_.iw"
 
 	(
-	nano_make_install_env
 	set -o xtrace
-	cd "${NANO_SRC}"
-	${NANO_MAKE} installworld DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes
-	# chflags -R noschg "${NANO_WORLDDIR}" # XXXJL
+    # XXXAS is this necessary here?
+	pkg_cmd update
+	if [ -n "$(nano_pkgbase_world_list)" ]; then
+		pkg_cmd install -U -y $(nano_pkgbase_world_list)
+	fi
+	# XXXJL pkg triggers should not need a chroot (lua script)
+	if ! $do_root; then
+		pkg_cmd triggers
+	else
+		tgt_pkg_chroot triggers
+	fi
 	) > ${NANO_LOG}/_.iw 2>&1
 }
 
@@ -1042,6 +1117,7 @@ install_precompiled_world() {
 	) > "${NANO_LOG}/_.iw" 2>&1
 }
 
+# XXXAS: no longer called — pkgbase packages include /etc content
 #
 # Run "make distribution" to populate /etc in NANO_WORLDDIR
 # and create an empty make.conf
@@ -1070,19 +1146,10 @@ install_kernel() {
 	pprint 3 "log: ${NANO_LOG}/_.ik"
 
 	(
-
-	nano_make_install_env
-	nano_make_kernel_env
-
-	if [ "${NANO_MODULES}" != "default" ]; then
-		MODULES_OVERRIDE="${NANO_MODULES}"
-		make_export MODULES_OVERRIDE
-	fi
-
 	set -o xtrace
-	cd "${NANO_SRC}"
-	${NANO_MAKE} installkernel DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes
-
+	if [ -n "$(nano_pkgbase_kernel_list)" ]; then
+		pkg_cmd install -U -y $(nano_pkgbase_kernel_list)
+	fi
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
@@ -1197,9 +1264,8 @@ fixup_before_diskimage() {
 	if [ -n "${NANO_METALOG}" ]; then
 		pprint 2 "Fixing metalog"
 
-		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		if [ -z "$NANO_NOPKGBASE" ]; then
 			_xxx_pkg_metalog
-			_xxx_run_pkg_scripts
 		fi
 
 		cp ${NANO_METALOG} ${NANO_METALOG}.pre
@@ -1861,7 +1927,8 @@ set_defaults_and_export() {
 	[ ! -d "${NANO_TOOLS}" ] && [ -d "${NANO_SRC}/${NANO_TOOLS}" ] && \
 		NANO_TOOLS="${NANO_SRC}/${NANO_TOOLS}" || true
 
-	if [ -n "${NANO_NOPRIV_BUILD}" ] && [ -z "${NANO_METALOG}" ]; then
+	if ( [ -n "${NANO_NOPRIV_BUILD}" ] || [ -z "${NANO_NOPKGBASE}" ] ) && \
+	    [ -z "${NANO_METALOG}" ]; then
 		NANO_METALOG=${NANO_OBJ}/_.metalog
 	fi
 

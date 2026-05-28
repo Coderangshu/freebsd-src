@@ -275,7 +275,7 @@ partitioning_code1_line() {
 }
 
 # Create the raw UFS root partition image using makefs
-_create_code_slice() {
+create_code_slice() {
 	pprint 2 "build code slice"
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
 
@@ -301,7 +301,7 @@ _create_code_slice() {
 # Assemble the final GPT disk image with optional EFI/BIOS boot partitions,
 # root A/B, cfg, and data partitions using mkimg
 #
-_create_diskimage() {
+create_diskimage() {
 	pprint 2 "build diskimage"
 	pprint 3 "log: ${NANO_OBJ}/_.di"
 
