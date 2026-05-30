@@ -5,6 +5,10 @@
 #
 #######################################################################
 
+#######################################################################
+# Distribution Set variables and functions
+#
+
 # These should be fixed in base.txz
 _xxx_remove_extra_dist_files() {
 	# Remove debug files present in base.txz
@@ -32,6 +36,10 @@ _xxx_libarchive_mtree_bug() {
 	sed -i "" -e 's|^/\. |\. |' "$NANO_METALOG"
 }
 
+#######################################################################
+# freebsd-base(7) (pkgbase) variables and functions
+#
+
 # Append metalog entries for directories that lack pkg tags in
 # the given mtree spec.  This should be fixed in pkg:
 # https://github.com/freebsd/pkg/issues/2672
@@ -44,4 +52,162 @@ _xxx_get_untagged_directories_from_mtree() {
 	cat "${NANO_SRC}/etc/mtree/${mtree}" |
 	    mtree -C -K uname,gname,tags | grep -v tags |
 	    sed -e "s|^\.|\.${base_dir}|g" >> "$NANO_METALOG"
+}
+
+# mtree: ./boot/dtb/arm: missing directory in specification
+#       These directories are missing from BSD.root.dist, however
+#       I do not want to add them to the mtree.  These must exist
+#       only for arm/arm64
+_xxx_add_missing_boot_dtb() {
+	tgt_dir boot/dtb/arm
+	tgt_dir boot/dtb/freescale
+	tgt_dir boot/dtb/marvell
+	tgt_dir boot/dtb/nvidia
+	tgt_dir boot/dtb/qcom
+}
+
+#
+# Build NANO_METALOG from pkgbase package manifests,
+# regenerate system databases (passwd, caps, services, mandoc),
+# and add missing entries
+#
+_xxx_pkg_metalog() {
+	local files directories path
+
+	# Add the root entry
+	echo ". type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+
+	_xxx_add_missing_boot_dtb
+
+	# https://github.com/freebsd/pkg/issues/2672
+	echo "./etc/local/periodic type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	echo "./etc/local/periodic/daily type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	echo "./etc/local/periodic/security type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	echo "./etc/local/periodic/weekly type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	# /conf/base counterparts
+	echo "./conf/base/etc/local/periodic type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	echo "./conf/base/etc/local/periodic/daily type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	echo "./conf/base/etc/local/periodic/security type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	echo "./conf/base/etc/local/periodic/weekly type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+
+	# Paths missing from the package manifest will default to
+	# root:wheel with 0755 permissions.
+	# Take care not to add them twice to the METALOG; otherwise,
+	# the wrong entry may appear first when sorting
+	tmp_metalog=$(mktemp -t nano_tmp_metalog)
+	trap 'rm -f "$tmp_metalog"' 1 2 15 EXIT
+	directories=$(tgt_pkg query "%Sp")
+	for path in $directories; do
+		path="${path#/}"
+		mtree_walk "$path" "$tmp_metalog"
+	done
+	files=$(tgt_pkg query "%Fp")
+	for file in $files; do
+		file="${file#/}"
+		if [ "$file" != "${file%/*}" ]; then
+			path="${file%/*}"
+			mtree_walk "$path" "$tmp_metalog"
+		else
+			continue
+		fi
+	done
+	cat "$NANO_METALOG" "$tmp_metalog" |
+	    awk '/^#/ { print; next } !seen[$1]++' > "${NANO_METALOG}.pre"
+	mv "${NANO_METALOG}.pre" "$NANO_METALOG"
+	trap - 1 2 15 EXIT
+	rm -f "$tmp_metalog"
+
+	# Remove the directory entries for the symlinked paths
+	sed -i "" "\=^\./usr/local/etc = { / type=dir / d; }" "$NANO_METALOG"
+	sed -i "" "\=^\./tmp = { / type=dir / d; }" "$NANO_METALOG"
+
+	# These directories may end up being generated many times
+	# by pkg -o METALOG and the first one may not have the right permissions
+	sed -i "" "\=^\./etc/ntp =s/mode=0\{0,1\}755/mode=0700/g" "$NANO_METALOG"
+	sed -i "" "\=^\./root =s/mode=0\{0,1\}755/mode=0750/g" "$NANO_METALOG"
+}
+
+# Manually run triggers and package scripts
+_xxx_run_pkg_scripts() {
+	# Repopulate the passwd db
+	if [ -f "${NANO_WORLDDIR}/etc/master.passwd" ]; then
+		pwd_mkdb -d "${NANO_WORLDDIR}/etc" \
+		    "${NANO_WORLDDIR}/etc/master.passwd" 2>/dev/null || true
+		# Add the passwd db files to the metalog
+		for dbs in etc/pwd.db etc/spwd.db etc/passwd; do
+			[ -f "${NANO_WORLDDIR}/${dbs}" ] || continue
+			case "${dbs##*/}" in
+			spwd.db) _mode=0600 ;;
+			*)       _mode=0644 ;;
+			esac
+			printf './%s type=file uname=root gname=wheel mode=%s\n' \
+			    "${dbs}" "${_mode}" >> "$NANO_METALOG"
+			printf './conf/base/%s type=file uname=root gname=wheel mode=%s\n' \
+			    "${dbs}" "${_mode}" >> "$NANO_METALOG"
+		done
+	fi
+	# Repopulate the capabilities db
+	if [ -f "${NANO_WORLDDIR}/etc/login.conf" ]; then
+		cap_mkdb "${NANO_WORLDDIR}/etc/login.conf" 2>/dev/null || true
+		# Add the capabilities db to the metalog
+		if [ -f "${NANO_WORLDDIR}/etc/login.conf.db" ]; then
+			echo "./etc/login.conf.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
+			echo "./conf/base/etc/login.conf.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
+		fi
+	fi
+	# Repopulate the services db
+	if [ -f "${NANO_WORLDDIR}/etc/services" ]; then
+		services_mkdb -q -o "${NANO_WORLDDIR}/var/db/services.db" \
+		    "${NANO_WORLDDIR}/" 2>/dev/null || true
+		# Add the services db to the metalog
+		if [ -f "${NANO_WORLDDIR}/var/db/services.db" ]; then
+			echo "./var/db/services.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
+			echo "./conf/base/var/db/services.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
+		fi
+	fi
+	# XXXJL certctl
+	if [ -f "${NANO_WORLDDIR}/etc/ssl/cert.pem" ]; then
+		echo "./etc/ssl/cert.pem type=file uname=root gname=wheel mode=0444" >> "$NANO_METALOG"
+	fi
+	# Repopulate mandoc dbs and add to metalog
+	for mandir in usr/share/man usr/share/openssl/man; do
+		[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
+		makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
+		if [ -f "${NANO_WORLDDIR}/${mandir}/mandoc.db" ]; then
+			printf './%s/mandoc.db type=file uname=root gname=wheel mode=0644\n' \
+			    "${mandir}" >> "$NANO_METALOG"
+		fi
+	done
+
+	# Add /sys symlink, we do run make distribution in install_etc()
+	_xxx_add_sys_symlink
+}
+
+#
+# If we do "make distribution", this directory must be present.
+# XXXJL Discuss adding this as a pkg script in base
+#
+_xxx_add_sys_symlink() {
+	(
+	cd "${NANO_WORLDDIR}"
+	ln -sf usr/src/sys sys
+	if [ -n "$NANO_METALOG" ]; then
+		echo "./sys type=link uname=root gname=wheel mode=0755 link=usr/src/sys" >> "$NANO_METALOG"
+	fi
+	)
+}
+
+#
+# pkg triggers should not need a chroot (lua script)
+# https://github.com/freebsd/pkg/issues/2673
+# Installing pkgbase as a user into a directory, these errors are thrown:
+# ldconfig: mkstemp(/var/run/ld-elf.so.hints.z0DWDA): Permission denied
+# pkg: Failed to create /triggers:Bad file descriptor
+#
+_xxx_tgt_pkg_triggers() {
+	if ! $do_root; then
+		tgt_pkg triggers
+	else
+		tgt_pkg_chroot triggers
+	fi
 }

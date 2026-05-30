@@ -302,7 +302,7 @@ nano_fetch_distsets() {
 		pprint 2 "Using existing distributions (as instructed)"
 	fi
 
-	if [ ! -d "$(nano_distset_dir)"  ]; then
+	if [ ! -d "$(nano_distset_dir)" ]; then
 		mkdir -p "$(nano_distset_dir)"
 	fi
 
@@ -443,33 +443,42 @@ nano_pkgbase_list_contains() {
 	esac
 }
 
-# Return the non-kernel subset of NANO_PKGBASE_LIST plus "pkg"
-nano_pkgbase_world_list() {
-	local list
+#
+# Return NANO_PKGBASE_LIST by build target
+# Input: $1 = build target (optional "world" or "kernel")
+#
+nano_pkgbase_list() {
+	local list package target
 
-	list="pkg" # Always install pkg
+	target="$1"
+	list=""
+
+	[ "$target" = "world" ] || [ -z "$target" ] && list="pkg"
+
 	for package in $NANO_PKGBASE_LIST; do
 		case "$package" in
-		FreeBSD-kernel-*) continue ;;
-		*) list="${list} $package" ;;
+		FreeBSD-kernel-*)
+			{ [ "$target" = "kernel" ] || [ -z "$target" ]; } &&
+			list="${list}${list:+ }$package"
+			;;
+		*)
+			{ [ "$target" = "world" ] || [ -z "$target" ]; } &&
+			list="${list}${list:+ }$package"
+			;;
 		esac
 	done
 
 	echo "$list"
 }
 
-# Return the kernel subsets from NANO_PKGBASE_LIST for separate kernel installation
+# Return the non-kernel subset of NANO_PKGBASE_LIST plus "pkg"
+nano_pkgbase_world_list() {
+	nano_pkgbase_list "world"
+}
+
+# Return the kernel subset of NANO_PKGBASE_LIST
 nano_pkgbase_kernel_list() {
-	local list
-
-	for package in $NANO_PKGBASE_LIST; do
-		case "$package" in
-		FreeBSD-kernel-*) list="${list}${list:+ }$package" ;;
-		*) continue ;;
-		esac
-	done
-
-	echo "$list"
+	nano_pkgbase_list "kernel"
 }
 
 # Remove the existing NANO_METALOG file to generate new metalog
@@ -478,7 +487,8 @@ nano_pkgbase_reset_metalog() {
 }
 
 #
-# Update the sha256 checksum of a file in the target pkg database to match the current file on disk
+# Update the sha256 checksum of a file in the target pkg database
+# to match the current file on disk
 # Input: $1 = file path relative to NANO_WORLDDIR
 #
 tgt_pkg_update_file_sha256() {
@@ -488,7 +498,7 @@ tgt_pkg_update_file_sha256() {
 
 	if [ -f "$file" ]; then
 		sha256=$(sha256 -q "${file}")
-		pkg_cmd shell "UPDATE files SET sha256 = '1\$${sha256}' WHERE path = '/${1}';"
+		tgt_pkg shell "UPDATE files SET sha256 = '1\$${sha256}' WHERE path = '/${1}';"
 	else
 		err "File ${file} not found"
 	fi
@@ -502,66 +512,67 @@ tgt_pkg_update_config_files_content() {
 	local escaped_file file
 
 	file="${NANO_WORLDDIR}/${1}"
-	# We need to escape single quotes and avoid $(...) from removing newlines at EOF
+	# We need to escape single quotes and avoid $(...)
+	# from removing newlines at EOF
 	escaped_file=$(sed "s/'/''/g" "$file"; printf 'EOF')
 	escaped_file=${escaped_file%EOF}
 
 	if [ -f "$file" ]; then
-		pkg_cmd shell "UPDATE config_files SET content = '$escaped_file' WHERE path = '/${1}';"
+		tgt_pkg shell "UPDATE config_files SET content = '$escaped_file' WHERE path = '/${1}';"
 	else
 		err "File ${file} not found"
 	fi
 }
 
-# XXXJL Rename to tgt_pkg?
-# XXXJL NANO_ABI needs a sanity check? (NANO_ARCH + NANO_OSVERSION)
-# XXXJL passing both OSVERSION and IGNORE_OSVERSION is oxymoronic
-# Run pkg(8) against NANO_WORLDDIR with the configured ABI, repo,
-# and cache settings
+#
+# Update the path the files table of the target pkg database from
+# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
+#
+tgt_pkg_update_file_path_etc_local() {
+	tgt_pkg shell <<-EOF
+		UPDATE files
+		SET path = '/etc/local' || SUBSTR(path, 15)
+		WHERE path LIKE '/usr/local/etc%';
+	EOF
+}
+
+# Run pkg(8) with the configured ABI, repo, and cache settings
 pkg_cmd() {
-	local install_as_user
-
-	if ! $do_root; then
-		install_as_user="-o INSTALL_AS_USER=yes"
-	fi
-
-	pkg --rootdir "$NANO_WORLDDIR" \
-	    --repo-conf-dir "$(nano_pkg_repos_dir)" \
+	pkg --repo-conf-dir "$(nano_pkg_repos_dir)" \
 	    -o ABI="$NANO_ABI" \
 	    -o ASSUME_ALWAYS_YES=yes \
 	    -o IGNORE_OSVERSION=yes \
 	    -o OSVERSION="$NANO_OSVERSION" \
 	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" \
-	    ${install_as_user} "$@"
+	    "$@"
 }
 
-# XXXJL chroot?
-# pkg: chroot failed: Operation not permitted (security.bsd.unprivileged_chroot sysctl not enabled))
+# Run pkg(8) with NANO_WORLDDIR as rootdir
+tgt_pkg() {
+	local install_as_user metalog
+
+	if ! $do_root; then
+		install_as_user="-o INSTALL_AS_USER=yes"
+	fi
+	if [ -n "$NANO_METALOG" ]; then
+		metalog="-o METALOG=${NANO_METALOG}"
+	fi
+
+	pkg_cmd --rootdir "$NANO_WORLDDIR" ${install_as_user} ${metalog} "$@"
+}
+
 # Run pkg(8) in chroot mode against NANO_WORLDDIR
-pkg_chroot_cmd() {
-	pkg --chroot "$NANO_WORLDDIR" \
-	    --repo-conf-dir "$(nano_pkg_repos_dir)" \
-	    -o ABI="$NANO_ABI" \
-	    -o ASSUME_ALWAYS_YES=yes \
-	    -o IGNORE_OSVERSION=yes \
-	    -o OSVERSION="$NANO_OSVERSION" \
-	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" "$@"
+tgt_pkg_chroot() {
+	pkg_cmd --chroot "$NANO_WORLDDIR" "$@"
 }
 
-# Return the directory used to cache downloaded pkg packages during the build
+# Return the directory used to cache downloaded packages
 nano_pkg_cachedir() {
 	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
 }
 
-# Return the directory where pkg repository configuration files are written for the build.
-nano_pkg_repos_dir() {
-	echo "${NANO_OBJ}/_.pkg"
-}
-
-# Copies FreeBSD pkg signing key fingerprints from the source tree into NANO_WORLDDIR/usr/share/keys
-nano_freebsd_pkg_repo_keys() {
-	# XXXJL
-	#${NANO_MAKE} -C "${NANO_SRC}/share/keys" DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes install #NO_ROOT
+# Copy FreeBSD pkg signing key fingerprints from the source tree
+nano_pkg_freebsd_repo_keys() {
 	(
 	cd "${NANO_SRC}/share/keys"
 	find . ! -name "Makefile*" |
@@ -569,13 +580,16 @@ nano_freebsd_pkg_repo_keys() {
 	)
 }
 
-# XXXJL wait until we have the full picture to determine the best way to
-# programmatically configure the pkg repos.  They differ if they are for a
-# -RELEASE or -CURRENT (release pkg uses an AWS KMS signature with a backup
-# signing key).  Account for when our own packages, signed by us or unsigned,
-# are generated.
-# Write the FreeBSD.conf pkg repository config file to the build's repo config directory
+# Return the directory of package repository configuration files
+nano_pkg_repos_dir() {
+	echo "${NANO_OBJ}/_.pkg"
+}
+
+# Generate a FreeBSD.conf package repository configuration file
+# XXXJL try setting CONSERVATIVE_UPGRADE=no on the builder,
+# if it fails, we must set it explicitly in pkg_cmd
 nano_pkg_repo_conf() {
+	rm -rf "$(nano_pkg_repos_dir)"
 	mkdir -p "$(nano_pkg_repos_dir)"
 	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
 FreeBSD-ports: {
@@ -593,12 +607,28 @@ FreeBSD-base: {
   enabled: yes
 }
 EOF
+# XXXJL FINGERPRINTS!
+	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
+FreeBSD-local: {
+  url: "file:///$(nano_pkg_cachedir)",
+  enabled: no
+}
+EOF
 }
 
-# Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache, and write the pkg repo config
-nano_configure_pkgbase_pkg() {
+# XXXJL check with ashish/jrm if it is OK to clobber the cachedir like this
+# XXXJL add support for local FINGERPRINTS
+nano_pkg_repo() {
+	pkg_cmd repo "$(nano_pkg_cachedir)"
+}
+
+#
+# Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache,
+# write the pkg repo config, and fetch pkgbase packages
+#
+nano_fetch_pkgbase_packages() {
 	pprint 2 "configure pkg"
-	pprint 3 "log: ${NANO_LOG}/_.cp"
+	pprint 3 "log: ${NANO_LOG}/_.pkgbase"
 
 	if [ ! -d "$NANO_LOG" ]; then
 		mkdir -p "$NANO_LOG"
@@ -618,119 +648,16 @@ nano_configure_pkgbase_pkg() {
 
 	if $do_clean; then
 		rm -rf "${NANO_OBJ}/_.cache"
+		mkdir -p "$(nano_pkg_cachedir)"
+		nano_pkg_freebsd_repo_keys
+		nano_pkg_repo_conf
+		tgt_pkg update
+		tgt_pkg fetch -d $(nano_pkgbase_list)
+		nano_pkg_repo
 	else
 		pprint 2 "Using existing packages (as instructed)"
 	fi
-
-	if [ ! -d "$(nano_pkg_cachedir)"  ]; then
-		mkdir -p "$(nano_pkg_cachedir)"
-	fi
-
-	nano_pkg_repo_conf
-	) > "${NANO_LOG}/_.cp" 2>&1
-}
-
-#
-# Build NANO_METALOG from pkgbase package manifests,
-# regenerate system databases (passwd, caps, services, mandoc),
-# and add missing entries
-#
-nano_pkg_metalog() {
-	local files directories path
-
-	# XXXJL mtree: ./boot/dtb/arm: missing directory in specification
-	#       These directories are missing from BSD.root.dist, however
-	#       I do not want to add them to the mtree.  These must exist
-	#       only for arm/arm64
-	tgt_dir boot/dtb/arm
-	tgt_dir boot/dtb/freescale
-	tgt_dir boot/dtb/marvell
-	tgt_dir boot/dtb/nvidia
-	tgt_dir boot/dtb/qcom
-
-	# XXXJL ideally there should be a way for pkg to output mtree/plist to a file when installing as non-root
-	echo ". type=dir uname=${NANO_DEF_UNAME}" \
-	    "gname=${NANO_DEF_GNAME} mode=0755" >> "$NANO_METALOG"
-
-	# XXX Paths missing from the package manifest will default to
-	# root:wheel with 0755 permissions
-	directories=$(pkg_cmd query "%Sp")
-	for path in $directories; do
-		path="${path#/}"
-		mtree_walk "$path"
-	done
-	files=$(pkg_cmd query "%Fp")
-	for file in $files; do
-		file="${file#/}"
-		path="${file%/*}"
-		mtree_walk "$path"
-	done
-
-	_xxx_get_untagged_directories_from_mtree BSD.usr.dist /usr
-
-	pkg_cmd query ".%Sp type=dir uname=%Su gname=%Sg mode=%Sm flags=%Sf" >> "$NANO_METALOG"
-	pkg_cmd query ".%Fp type=file uname=%Fu gname=%Fg mode=%Fm flags=%Ff link=%Ft" >> "$NANO_METALOG"
-	sed -i "" -e 's/ flags=-//g' -e 's/ link=$//g' "$NANO_METALOG"
-	sed -i "" -e '/ link=/s/ type=file/ type=link/g' "$NANO_METALOG"
-	echo "./tmp type=link uname=root gname=wheel mode=1777 link=var/tmp" >> "$NANO_METALOG"
-
-	# XXX Manually adding these files which are not in any pkg manifest so pkg_cmd query misses them
-    # Repopulate the passwd db
-	if [ -f "${NANO_WORLDDIR}/etc/master.passwd" ]; then
-		/usr/sbin/pwd_mkdb -d "${NANO_WORLDDIR}/etc" \
-		    "${NANO_WORLDDIR}/etc/master.passwd" 2>/dev/null || true
-	fi
-    # Add the passwd db files to the metalog with the right permissions
-	for dbs in etc/pwd.db etc/spwd.db etc/passwd; do
-		[ -f "${NANO_WORLDDIR}/${dbs}" ] || continue
-		case "${dbs##*/}" in
-		spwd.db) _mode=0600 ;;
-		*)       _mode=0644 ;;
-		esac
-		printf './%s type=file uname=root gname=wheel mode=%s\n' \
-		    "${dbs}" "${_mode}" >> "$NANO_METALOG"
-	done
-	# Repopulate the capabilities db
-	if [ -f "${NANO_WORLDDIR}/etc/login.conf" ]; then
-		cap_mkdb "${NANO_WORLDDIR}/etc/login.conf" 2>/dev/null || true
-	fi
-    # Add the capabilities db to the metalog
-	[ -f "${NANO_WORLDDIR}/etc/login.conf.db" ] && \
-	    printf './etc/login.conf.db type=file uname=root gname=wheel mode=0644\n' \
-	    >> "$NANO_METALOG"
-	# Repopulate the services db
-	if [ -f "${NANO_WORLDDIR}/etc/services" ]; then
-		services_mkdb -q -o "${NANO_WORLDDIR}/var/db/services.db" \
-		    "${NANO_WORLDDIR}/" 2>/dev/null || true
-	fi
-    # Add the services db to the metalog
-	[ -f "${NANO_WORLDDIR}/var/db/services.db" ] && \
-	    printf './var/db/services.db type=file uname=root gname=wheel mode=0644\n' \
-	    >> "$NANO_METALOG"
-	[ -f "${NANO_WORLDDIR}/etc/ssl/cert.pem" ] && \
-	    printf './etc/ssl/cert.pem type=file uname=root gname=wheel mode=0444\n' \
-	    >> "$NANO_METALOG"
-    # Repopulate mandoc dbs and add to metalog
-	for mandir in usr/share/man usr/share/openssl/man; do
-		[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
-		makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
-		[ -f "${NANO_WORLDDIR}/${mandir}/mandoc.db" ] && \
-		    printf './%s/mandoc.db type=file uname=root gname=wheel mode=0644\n' \
-		    "${mandir}" >> "$NANO_METALOG"
-	done
-
-	# XXXJL this is from setup_nanobsd(), when it runs, the NANO_METALOG has no entries yes
-	# so we must execute it again here without sorting, so the right mode/permissions stay last.
-	for d in var etc; do
-		grep "^.\/${d}\/" "${NANO_METALOG}" |
-		    sed -e "s=^./${d}=./conf/base/${d}=g" >> "${NANO_METALOG}.conf"
-	done
-	cat "${NANO_METALOG}.conf" >> "${NANO_METALOG}"
-	rm -f "${NANO_METALOG}.conf"
-
-	# XXX This package needs to be regenerated (ask someone, but try locally first)
-	# (FreeBSD-bootloader-dev)
-	sed -i "" -e 's|\./usr/share/man/man3/libsa\.3\.gz type=file uname= gname= mode=0|\./usr/share/man/man3/libsa\.3\.gz type=file uname=root gname=wheel mode=444|g' "$NANO_METALOG"
+	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
 #######################################################################
@@ -801,18 +728,6 @@ tgt_touch() (
 )
 
 #
-# Update the path the files table of the target pkg database from
-# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
-#
-tgt_pkg_update_file_path_etc_local() {
-	pkg_cmd shell <<-EOF
-		UPDATE files
-		SET path = '/etc/local' || SUBSTR(path, 15)
-		WHERE path LIKE '/usr/local/etc%';
-	EOF
-}
-
-#
 # Convert a directory into a symlink. Takes three arguments, the current
 # directory, what it should become a symlink to, and optionally, the mode.
 # The directory is removed and a symlink is created. If we're doing
@@ -827,7 +742,7 @@ tgt_dir2symlink() (
 
 	rm -xrf "$dir"
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		pkg_cmd shell <<-EOF
+		tgt_pkg shell <<-EOF
 			DELETE FROM directories WHERE path = '$dir';
 		EOF
 	fi
@@ -843,7 +758,7 @@ tgt_dir2symlink() (
 		    "$symlink" >> "$NANO_METALOG"
 	fi
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		pkg_cmd shell <<-EOF
+		tgt_pkg shell <<-EOF
 			INSERT INTO files (path, uname, gname, perm, fflags, symlink_target)
 			VALUES ('$dir', '$NANO_DEF_UNAME', '$NANO_DEF_GNAME', '$mode', 0, '$symlink');
 		EOF
@@ -869,9 +784,10 @@ tgt_dir() {
 # Assume default ownership and directory permissions
 #
 mtree_walk() {
-	local dir oifs path
+	local dir metalog oifs path
 
 	dir="$1"
+	metalog="${2:-$NANO_METALOG}"
 	path=""
 
 	oifs="$IFS"
@@ -879,7 +795,7 @@ mtree_walk() {
 	for d in $dir; do
 		path="${path}/${d}"
 		printf ".%s type=dir uname=%s gname=%s mode=0755\n" \
-		    "$path" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$NANO_METALOG"
+		    "$path" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$metalog"
 	done
 	IFS="$oifs"
 }
@@ -1045,17 +961,12 @@ install_precompiled_world() {
 	(
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
-		nano_freebsd_pkg_repo_keys
-		pkg_cmd update
+		nano_pkg_freebsd_repo_keys
+		tgt_pkg update -r FreeBSD-local
 		if [ -n "$(nano_pkgbase_world_list)" ]; then
-			pkg_cmd install -U -y $(nano_pkgbase_world_list)
+			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_world_list)
 		fi
-		# XXXJL pkg triggers should not need a chroot (lua script)
-		if ! $do_root; then
-			pkg_cmd triggers
-		else
-			pkg_chroot_cmd triggers
-		fi
+		_xxx_tgt_pkg_triggers
 	else
 		for distset in $NANO_DISTRIBUTIONS; do
 			if [ "$distset" = "kernel.txz" ] || \
@@ -1119,7 +1030,7 @@ install_precompiled_kernel() {
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		if [ -n "$(nano_pkgbase_kernel_list)" ]; then
-			pkg_cmd install -U -y $(nano_pkgbase_kernel_list)
+			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_kernel_list)
 		fi
 	else
 		if [ -f "$(nano_distset_dir)/kernel.txz" ]; then
@@ -1219,7 +1130,8 @@ fixup_before_diskimage() {
 		pprint 2 "Fixing metalog"
 
 		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-			nano_pkg_metalog
+			_xxx_pkg_metalog
+			_xxx_run_pkg_scripts
 		fi
 
 		cp ${NANO_METALOG} ${NANO_METALOG}.pre
@@ -1251,6 +1163,10 @@ setup_nanobsd() {
 		cd ..
 		rm -xrf etc
 		)
+		if [ -n "$NANO_METALOG" ]; then
+			sed -i "" "\=^\./usr/local/etc =d" "$NANO_METALOG"
+			sed -i "" -e "s=^\./usr/local/etc/=./etc/local/=g" "$NANO_METALOG"
+		fi
 		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
 			tgt_pkg_update_file_path_etc_local
 		fi
@@ -1290,7 +1206,10 @@ setup_nanobsd() {
 	echo "mount -o ro /dev/${NANO_DRIVE}${NANO_SLICE_CFG}" > conf/default/etc/remount
 	tgt_touch conf/default/etc/remount
 
-	# Put /tmp on the /var ramdisk (could be symlink already)
+	# Put /tmp on the /var ramdisk (it may already be symlinked)
+	if [ -n "$NANO_METALOG" ]; then
+		sed -i "" "\=^\./tmp =d" "$NANO_METALOG"
+	fi
 	tgt_dir2symlink tmp var/tmp 1777
 
 	) > ${NANO_LOG}/_.dl 2>&1
