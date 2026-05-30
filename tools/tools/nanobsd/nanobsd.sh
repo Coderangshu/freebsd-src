@@ -28,8 +28,8 @@
 
 set -e
 
-nanobsd_sh=`realpath $0`
-topdir=`dirname ${nanobsd_sh}`
+nanobsd_sh=$(realpath $0)
+topdir=$(dirname ${nanobsd_sh})
 . "${topdir}/_xxx_includes.subr"
 . "${topdir}/defaults.sh"
 
@@ -52,8 +52,8 @@ do_prep_image=true
 . "${topdir}/legacy.sh"
 
 set +e
-args=`getopt BKXWbc:fhiIknPpqUvw $*`
-if [ $? -ne 0 ] ; then
+args=$(getopt BKXWbc:fhiIknPpqUvw $*)
+if [ $? -ne 0 ]; then
 	usage
 	exit 2
 fi
@@ -98,7 +98,7 @@ do
 	-c)
 		# Make config file path available to the config file
 		# itself so that it can access additional files relative
-		# to its own location.
+		# to its own location
 		NANO_CONFIG=$2
 		. "$2"
 		shift
@@ -158,7 +158,7 @@ do
 	esac
 done
 
-if [ $# -gt 0 ] ; then
+if [ $# -gt 0 ]; then
 	echo "$0: Extraneous arguments supplied"
 	usage
 fi
@@ -177,14 +177,14 @@ fi
 
 pprint 1 "NanoBSD image ${NANO_NAME} build starting"
 
-if $do_prep_image ; then
+if $do_prep_image; then
 	run_early_customize
 else
 	pprint 2 "Skipping early customization for image prep (as instructed)"
 fi
 
-if $do_world ; then
-	if $do_clean ; then
+if $do_world; then
+	if $do_clean; then
 		clean_build
 	else
 		pprint 2 "Using existing build tree (as instructed)"
@@ -195,8 +195,8 @@ else
 	pprint 2 "Skipping buildworld (as instructed)"
 fi
 
-if $do_kernel ; then
-	if ! $do_world ; then
+if $do_kernel; then
+	if ! $do_world; then
 		make_conf_build
 	fi
 	build_kernel
@@ -216,9 +216,9 @@ else
 	fi
 fi
 
-if $do_installworld ; then
+if $do_installworld; then
 	clean_world
-	if $do_precompiled ; then
+	if $do_precompiled; then
 		install_precompiled_world
 	else
 		make_conf_install
@@ -229,14 +229,14 @@ else
 	pprint 2 "Skipping installworld (as instructed)"
 fi
 
-if ${do_native_xtools} ; then
+if ${do_native_xtools}; then
 	native_xtools
 fi
-if ${do_prep_image} ; then
+if ${do_prep_image}; then
 	setup_nanobsd_etc
 fi
-if $do_installkernel ; then
-	if $do_precompiled ; then
+if $do_installkernel; then
+	if $do_precompiled; then
 		install_precompiled_kernel
 	else
 		install_kernel
@@ -246,11 +246,11 @@ else
 fi
 
 if $do_precompiled && [ -n "$NANO_NOPKGBASE" ] && \
-    ($do_installworld || $do_installkernel) ; then
+    ($do_installworld || $do_installkernel); then
 	patch_precompiled
 fi
 
-if $do_prep_image ; then
+if $do_prep_image; then
 	run_customize
 	setup_nanobsd
 	prune_usr
@@ -259,14 +259,14 @@ if $do_prep_image ; then
 else
 	pprint 2 "Skipping image prep (as instructed)"
 fi
-if $do_code ; then
+if $do_code; then
 	calculate_partitioning
 	if [ -z "${NANO_NOPRIV_BUILD}" ]; then
 		create_code_slice
 	else
 		_create_code_slice
 	fi
-	if $do_image ; then
+	if $do_image; then
 		if [ -z "${NANO_NOPRIV_BUILD}" ]; then
 			create_diskimage
 		else

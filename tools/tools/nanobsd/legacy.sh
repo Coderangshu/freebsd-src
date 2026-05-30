@@ -27,18 +27,24 @@
 #
 #
 
-# Media geometry, only relevant if bios doesn't understand LBA.
+# Media geometry, only relevant if bios doesn't understand LBA
 [ -n "$NANO_SECTS" ] || NANO_SECTS=63
 [ -n "$NANO_HEADS" ] || NANO_HEADS=16
 
+#
 # The first partition should start at offset 16,
-# because the first 16 sectors are reserved for metadata.
+# because the first 16 sectors are reserved for metadata
+#
 METADATA_SECTS=16
 
+#######################################################################
 # Functions and variable definitions used by the legacy nanobsd
-# image building system.
+# image building system
 
-# Calculate MBR partition layout (start offset, size, index) from media/image/code/conf/data sizes
+#
+# Calculate MBR partition layout (start offset, size, index)
+# from media/image/code/conf/data sizes
+#
 calculate_partitioning() {
 	echo $NANO_MEDIASIZE $NANO_IMAGES \
 		$NANO_SECTS $NANO_HEADS \
@@ -73,17 +79,17 @@ calculate_partitioning() {
 		c = isl * cs;
 
 		# Second image partition (if any) also starts offset one
-		# track to keep them identical.
+		# track to keep them identical
 		if ($2 > 1) {
 			print $3 + c, isl * cs - $3, 2
 			c += isl * cs;
 		}
 
-		# Config partition starts at cylinder boundary.
+		# Config partition starts at cylinder boundary
 		print c, csl * cs, 3
 		c += csl * cs
 
-		# Data partition (if any) starts at cylinder boundary.
+		# Data partition (if any) starts at cylinder boundary
 		if ($7 > 0) {
 			print c, dsl * cs, 4
 		} else if ($7 < 0 && $1 > c) {
@@ -111,7 +117,7 @@ create_code_slice() {
 	mkdir -p ${MNT}
 	CODE_SIZE=$(awk '$3 == 1 {print $2}' "${NANO_LOG}/_.partitioning")
 
-	if [ "${NANO_MD_BACKING}" = "swap" ] ; then
+	if [ "${NANO_MD_BACKING}" = "swap" ]; then
 		MD=$(mdconfig -a -t swap -s ${CODE_SIZE} -x ${NANO_SECTS} \
 		    -y ${NANO_HEADS})
 	else
@@ -142,7 +148,7 @@ create_code_slice() {
 	( cd ${MNT} && du -k ) > ${NANO_OBJ}/_.du
 	nano_umount ${MNT}
 
-	if [ "${NANO_MD_BACKING}" = "swap" ] ; then
+	if [ "${NANO_MD_BACKING}" = "swap" ]; then
 		echo "Writing out ${NANO_IMG1NAME}..."
 		dd conv=sparse if=/dev/${MD} of=${IMG} bs=64k
 	fi
@@ -153,8 +159,10 @@ create_code_slice() {
 	) > ${NANO_OBJ}/_.cs 2>&1
 }
 
-# Create the root UFS partition image using makefs then wrap it in a BSD slice with mkimg
-# nopriv-build variant
+#
+# Create the root UFS partition image using makefs,
+# then wrap it in a BSD slice with mkimg nopriv-build variant
+#
 _create_code_slice() {
 	pprint 2 "build code slice"
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
@@ -182,8 +190,10 @@ _create_code_slice() {
 	) > ${NANO_OBJ}/_.cs 2>&1
 }
 
+#
 # Assemble a full MBR disk image using mdconfig and gpart,
 # write all partitions (root, altroot, cfg, data) via live mounts
+#
 create_diskimage() {
 	pprint 2 "build diskimage"
 	pprint 3 "log: ${NANO_OBJ}/_.di"
@@ -194,7 +204,7 @@ create_diskimage() {
 	MNT=${NANO_OBJ}/_.mnt
 	mkdir -p ${MNT}
 
-	if [ "${NANO_MD_BACKING}" = "swap" ] ; then
+	if [ "${NANO_MD_BACKING}" = "swap" ]; then
 		MD=$(mdconfig -a -t swap -s ${NANO_MEDIASIZE} -x ${NANO_SECTS} \
 		    -y ${NANO_HEADS})
 	else
@@ -215,8 +225,8 @@ create_diskimage() {
 		print "gpart add -t freebsd -b ", $1, " -s ", $2, " -i ", $3, " $1"
 	}
 	END {
-		# Force slice 1 to be marked active. This is necessary
-		# for booting the image from a USB device to work.
+		# Force slice 1 to be marked active.  This is necessary
+		# for booting the image from a USB device to work
 		print "gpart set -a active -i 1 $1"
 	}
 	' ${NANO_LOG}/_.partitioning > ${NANO_OBJ}/_.gpart
@@ -225,8 +235,6 @@ create_diskimage() {
 
 	sh ${NANO_OBJ}/_.gpart ${MD}
 	gpart show ${MD}
-	# XXX: params
-	# XXX: pick up cached boot* files, they may not be in image anymore.
 	if [ -f ${NANO_WORLDDIR}/${NANO_BOOTLOADER} ]; then
 		gpart bootcode -b ${NANO_WORLDDIR}/${NANO_BOOTLOADER} ${NANO_BOOTFLAGS} ${MD}
 		boot0cfg ${NANO_BOOT0CFG} ${MD}
@@ -235,7 +243,7 @@ create_diskimage() {
 	echo "Writing code image..."
 	dd conv=sparse if=${NANO_DISKIMGDIR}/${NANO_IMG1NAME} of=/dev/${MD}${NANO_SLICE_ROOT} bs=64k
 
-	if [ $NANO_IMAGES -gt 1 -a $NANO_INIT_IMG2 -gt 0 ] ; then
+	if [ $NANO_IMAGES -gt 1 -a $NANO_INIT_IMG2 -gt 0 ]; then
 		# Duplicate to second image (if present)
 		echo "Duplicating to second image..."
 		dd conv=sparse if=/dev/${MD}${NANO_SLICE_ROOT} of=/dev/${MD}${NANO_SLICE_ALTROOT} bs=64k
@@ -246,7 +254,7 @@ create_diskimage() {
 		done
 		nano_umount ${MNT}
 		# Override the label from the first partition so we
-		# don't confuse glabel with duplicates.
+		# don't confuse glabel with duplicates
 		if [ -n "${NANO_LABEL}" ]; then
 			tunefs -L ${NANO_LABEL}"${NANO_ALTROOT}" /dev/${MD}${NANO_ALTROOT}
 		fi
@@ -255,17 +263,17 @@ create_diskimage() {
 	# Create Config slice
 	populate_cfg_slice /dev/${MD}${NANO_SLICE_CFG} "${NANO_CFGDIR}" ${MNT} "${NANO_SLICE_CFG}"
 
-	# Create Data slice, if any.
+	# Create Data slice, if any
 	if [ -n "$NANO_SLICE_DATA" -a "$NANO_SLICE_CFG" = "$NANO_SLICE_DATA" -a \
 	   "$NANO_DATASIZE" -ne 0 ]; then
 		pprint 2 "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
 		exit 2
 	fi
-	if [ $NANO_DATASIZE -ne 0 -a -n "$NANO_SLICE_DATA" ] ; then
+	if [ $NANO_DATASIZE -ne 0 -a -n "$NANO_SLICE_DATA" ]; then
 		populate_data_slice /dev/${MD}${NANO_SLICE_DATA} "${NANO_DATADIR}" ${MNT} "${NANO_SLICE_DATA}"
 	fi
 
-	if [ "${NANO_MD_BACKING}" = "swap" ] ; then
+	if [ "${NANO_MD_BACKING}" = "swap" ]; then
 		if [ ${NANO_IMAGE_MBRONLY} ]; then
 			echo "Writing out _.disk.mbr..."
 			dd if=/dev/${MD} of=${NANO_DISKIMGDIR}/_.disk.mbr bs=512 count=1
@@ -285,8 +293,10 @@ create_diskimage() {
 	) > ${NANO_LOG}/_.di 2>&1
 }
 
+#
 # Assemble the final MBR disk image from pre-built partition images using mkimg
 # nopriv-build variant
+#
 _create_diskimage() {
 	pprint 2 "build diskimage"
 	pprint 3 "log: ${NANO_OBJ}/_.di"
@@ -310,8 +320,8 @@ _create_diskimage() {
 
 	diskimage="-p freebsd:=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}:$(( NANO_SECTS * 512 ))"
 
-	if [ "$NANO_IMAGES" -gt 1 ] ; then
-		if [ "$NANO_INIT_IMG2" -gt 0 ] ; then
+	if [ "$NANO_IMAGES" -gt 1 ]; then
+		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
 			echo "Duplicating to second image..."
 			tgt_switch_root_fstab "${NANO_SLICE_ROOT}" "${NANO_SLICE_ALTROOT}"
 			nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
@@ -339,14 +349,14 @@ _create_diskimage() {
 	    "${NANO_SLICE_CFG}" "${CONF_SIZE}" "${NANO_METALOG_CFG}"
 	cfgimage="-p freebsd:=${NANO_OBJ}/_.cfg.part"
 
-	# Create Data slice, if any.
+	# Create Data slice, if any
 	if [ -n "${NANO_SLICE_DATA}" ] &&
 	    [ "${NANO_SLICE_CFG}" = "${NANO_SLICE_DATA}" ] &&
 	    [ "${NANO_DATASIZE}" -ne 0 ]; then
 		pprint 2 "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
 		exit 2
 	fi
-	if [ "${NANO_DATASIZE}" -ne 0 ] && [ -n "${NANO_SLICE_DATA}" ] ; then
+	if [ "${NANO_DATASIZE}" -ne 0 ] && [ -n "${NANO_SLICE_DATA}" ]; then
 		_populate_data_part "${NANO_OBJ}/_.data.part" "${NANO_DATADIR}" \
 		    "${NANO_SLICE_DATA}" "${DATA_SIZE}" "${NANO_METALOG_DATA}"
 		dataimage="-p freebsd:=${NANO_OBJ}/_.data.part"
