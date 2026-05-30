@@ -122,13 +122,17 @@ NANO_IMAGES=2
 # 1 -> Initialize second image with a copy of the first
 NANO_INIT_IMG2=1
 
-# Size of code file system in ssize sectors (0 = auto)
+# Size of code file system in 512 bytes sectors
+# If zero, size will be as large as possible.
 NANO_CODESIZE=0
 
-# Size of configuration file system in ssize sectors
+# Size of configuration file system in 512 bytes sectors
+# Cannot be zero.
 NANO_CONFSIZE=2048
 
-# Size of data file system in ssize sectors (0 = none, negative = max)
+# Size of data file system in 512 bytes sectors
+# If zero: no partition configured.
+# If negative: max size possible
 NANO_DATASIZE=0
 
 # Size of the /etc ramdisk in 512 bytes sectors
