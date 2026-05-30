@@ -395,8 +395,6 @@ patch_precompiled() {
 
 	# Remove old kernel
 	tgt_rm boot/kernel.old
-	# Remove etcupdate(8) database
-	tgt_rm var/db/etcupdate
 
 	# XXXJL This should be fixed in base.txz
 	# Remove debug files present in base.txz
