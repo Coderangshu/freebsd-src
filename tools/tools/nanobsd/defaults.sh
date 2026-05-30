@@ -399,8 +399,6 @@ patch_precompiled() {
 	tgt_rm var/db/etcupdate
 
 	# XXXJL This should be fixed in base.txz
-	# XXX Extra directory in 15.0-RELEASE base.txz
-	tgt_rm usr/share/pkg
 	# Remove debug files present in base.txz
 	if ! nano_distributions_contains "-dbg.txz "; then
 		tgt_rm usr/lib/debug
