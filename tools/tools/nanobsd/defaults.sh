@@ -258,7 +258,10 @@ nano_distset_dir() {
 	echo "${NANO_OBJ}/_.cache/$(nano_distset_reldir)/$(nano_distset_arch)/${NANO_REVISION}-${NANO_BRANCH}"
 }
 
-# Build the remote download URL for distribution tarballs, handling both ftp and https mirror formats
+#
+# Build the remote download URL for distribution tarballs,
+# handling both ftp and https mirror formats
+#
 nano_distset_url() {
 	local site
 
@@ -274,7 +277,10 @@ nano_distset_url() {
 	echo "${site}/$(nano_distset_reldir)/$(nano_distset_arch)/${NANO_REVISION}-${NANO_BRANCH}"
 }
 
-# Download tarballs from the FreeBSD mirror and verify their SHA256 checksums against MANIFEST
+#
+# Download tarballs from the FreeBSD mirror and
+# verify their SHA256 checksums against MANIFEST
+#
 nano_fetch_distsets() {
 	pprint 2 "fetch distribution sets"
 	pprint 3 "log: ${NANO_LOG}/_.ds"
@@ -337,8 +343,7 @@ nano_fetch_distsets() {
 }
 
 #
-# Apply freebsd-update security patches to precompiled distribution binaries
-# and remove unwanted files (debug, lib32, tests)
+# Apply freebsd-update patches to precompiled distribution binaries
 # Distribution Sets are not patched, use the same logic from poudriere(8)
 #
 patch_precompiled() {
