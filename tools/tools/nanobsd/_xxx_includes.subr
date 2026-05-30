@@ -1,0 +1,47 @@
+#######################################################################
+#
+# XXX Include Functions
+# Functions in this file should be removed before submitting our changes upstream
+#
+#######################################################################
+
+# These should be fixed in base.txz
+_xxx_remove_extra_dist_files() {
+	# Remove debug files present in base.txz
+	if ! nano_distributions_contains "-dbg.txz "; then
+		tgt_rm usr/lib/debug
+	fi
+	# Remove lib32 files present in base.txz
+	if ! nano_distributions_contains " lib32"; then
+		tgt_rm libexec/ld-elf32.so.1
+		tgt_rm usr/bin/ldd32
+		tgt_rm usr/libexec/ld-elf32.so.1
+	fi
+	# Remove test files present in base.txz
+	if ! nano_distributions_contains " tests.txz "; then
+		tgt_rm usr/tests
+		tgt_rm usr/lib/libxo/encoder/test.enc
+		tgt_rm usr/share/man/man7/tests.7.gz
+	fi
+}
+
+# Already fixed upstream
+# https://github.com/libarchive/libarchive/pull/3008
+# Account for a bug in libarchive, where the first entry is "/."
+_xxx_libarchive_mtree_bug() {
+	sed -i "" -e 's|^/\. |\. |' "$NANO_METALOG"
+}
+
+# Append metalog entries for directories that lack pkg tags in
+# the given mtree spec.  This should be fixed in pkg:
+# https://github.com/freebsd/pkg/issues/2672
+# $1 = mtree filename (under NANO_SRC/etc/mtree)
+# $2 = base dir prefix to prepend
+_xxx_get_untagged_directories_from_mtree() {
+	local mtree="$1"
+	local base_dir="$2"
+
+	cat "${NANO_SRC}/etc/mtree/${mtree}" |
+	    mtree -C -K uname,gname,tags | grep -v tags |
+	    sed -e "s|^\.|\.${base_dir}|g" >> "$NANO_METALOG"
+}

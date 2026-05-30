@@ -30,6 +30,7 @@ set -e
 
 nanobsd_sh=`realpath $0`
 topdir=`dirname ${nanobsd_sh}`
+. "${topdir}/_xxx_includes.subr"
 . "${topdir}/defaults.sh"
 
 #######################################################################

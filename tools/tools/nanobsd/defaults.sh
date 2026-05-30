@@ -396,23 +396,7 @@ patch_precompiled() {
 	# Remove old kernel
 	tgt_rm boot/kernel.old
 
-	# XXXJL This should be fixed in base.txz
-	# Remove debug files present in base.txz
-	if ! nano_distributions_contains "-dbg.txz "; then
-		tgt_rm usr/lib/debug
-	fi
-	# Remove lib32 files present in base.txz
-	if ! nano_distributions_contains " lib32"; then
-		tgt_rm libexec/ld-elf32.so.1
-		tgt_rm usr/bin/ldd32
-		tgt_rm usr/libexec/ld-elf32.so.1
-	fi
-	# Remove test files present in base.txz
-	if ! nano_distributions_contains " tests.txz "; then
-		tgt_rm usr/tests
-		tgt_rm usr/lib/libxo/encoder/test.enc
-		tgt_rm usr/share/man/man7/tests.7.gz
-	fi
+	_xxx_remove_extra_dist_files
 	) > "${NANO_LOG}/_.pds" 2>&1
 }
 
@@ -426,9 +410,7 @@ nano_distset_metalog() {
 		    @"$(nano_distset_dir)/${distset}" \
 		    2>/dev/null >> "$NANO_METALOG"
 	done
-
-	# XXX account for a bug in libarchive, where the first entry is "/."
-	sed -i "" -e 's|^/\. |\. |' "$NANO_METALOG"
+	_xxx_libarchive_mtree_bug
 }
 
 #######################################################################
@@ -529,8 +511,8 @@ tgt_pkg_update_config_files_content() {
 # XXXJL Rename to tgt_pkg?
 # XXXJL NANO_ABI needs a sanity check? (NANO_ARCH + NANO_OSVERSION)
 # XXXJL passing both OSVERSION and IGNORE_OSVERSION is oxymoronic
-#
-# Run pkg(8) against NANO_WORLDDIR with the configured ABI, repo, and cache settings
+# Run pkg(8) against NANO_WORLDDIR with the configured ABI, repo,
+# and cache settings
 pkg_cmd() {
 	local install_as_user
 
@@ -550,7 +532,6 @@ pkg_cmd() {
 
 # XXXJL chroot?
 # pkg: chroot failed: Operation not permitted (security.bsd.unprivileged_chroot sysctl not enabled))
-#
 # Run pkg(8) in chroot mode against NANO_WORLDDIR
 pkg_chroot_cmd() {
 	pkg --chroot "$NANO_WORLDDIR" \
@@ -645,19 +626,6 @@ nano_configure_pkgbase_pkg() {
 }
 
 #
-# Append metalog entries for directories that lack pkg tags in the given mtree spec
-# Input: $1 = mtree filename (under NANO_SRC/etc/mtree), $2 = base dir prefix to prepend
-#
-_xxx_get_untagged_directories_from_mtree() {
-	local mtree="$1"
-	local base_dir="$2"
-
-	cat "${NANO_SRC}/etc/mtree/${mtree}" |
-	    mtree -C -K uname,gname,tags | grep -v tags |
-	    sed -e "s|^\.|\.${base_dir}|g" >> "$NANO_METALOG"
-}
-
-#
 # Build NANO_METALOG from pkgbase package manifests,
 # regenerate system databases (passwd, caps, services, mandoc),
 # and add missing entries
@@ -693,7 +661,6 @@ nano_pkg_metalog() {
 		mtree_walk "$path"
 	done
 
-	# XXX These directories do not have a package tag in their mtree yet
 	_xxx_get_untagged_directories_from_mtree BSD.usr.dist /usr
 
 	pkg_cmd query ".%Sp type=dir uname=%Su gname=%Sg mode=%Sm flags=%Sf" >> "$NANO_METALOG"
