@@ -276,16 +276,16 @@ else
 fi
 if $do_code; then
 	calculate_partitioning
-	if [ "${NANO_USE_GPT}" -ne 0 ] || [ -z "${NANO_NOPRIV_BUILD}" ]; then
-		create_code_slice
-	else
+	if [ -n "${NANO_NOPRIV_BUILD}" ]; then
 		_create_code_slice
+	else
+		create_code_slice
 	fi
 	if $do_image ; then
-		if [ "${NANO_USE_GPT}" -ne 0 ] || [ -z "${NANO_NOPRIV_BUILD}" ]; then
-			create_diskimage
-		else
+		if [ -n "${NANO_NOPRIV_BUILD}" ]; then
 			_create_diskimage
+		else
+			create_diskimage
 		fi
 	else
 		pprint 2 "Skipping image build (as instructed)"

@@ -274,23 +274,54 @@ partitioning_code1_line() {
 	echo $line
 }
 
-# Create the raw UFS root partition image using makefs
+#
+# Create the raw UFS root partition image using makefs, building directly
+# from NANO_WORLDDIR without a metalog spec.  Used for normal (root) builds.
+#
 create_code_slice() {
 	pprint 2 "build code slice"
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
 
 	(
-	local code1_line code_sects code_bytes makefs_sectors
+	local code1_line code_sects code_bytes makefs_sects
 
 	code1_line=$(partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
-    code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
-	makefs_sectors=$(( code_bytes / 512 ))
+	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
+	makefs_sects=$(( code_bytes / 512 ))
+
+	echo "Writing code image..."
+	makefs -t ffs -S "${NANO_UFS_SECTOR_SIZE}" \
+	    -Z ${NANO_MAKEFS} -o minfree=0,optimization=space \
+	    -N "${NANO_WORLDDIR}/etc" -s "${makefs_sects}b" \
+	    -T "${NANO_TIMESTAMP}" \
+	    "${NANO_OBJ}/_.disk.part" "${NANO_WORLDDIR}"
+	mv "${NANO_OBJ}/_.disk.part" "${NANO_DISKIMGDIR}/_.disk.image"
+
+	) > ${NANO_OBJ}/_.cs 2>&1
+}
+
+#
+# Create the raw UFS root partition image using makefs with a metalog spec.
+# Used for nopriv (-U) source builds where file ownership lives in the metalog.
+#
+_create_code_slice() {
+	pprint 2 "build code slice"
+	pprint 3 "log: ${NANO_OBJ}/_.cs"
+
+	(
+	local code1_line code_sects code_bytes makefs_sects
+
+	code1_line=$(partitioning_code1_line)
+
+	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
+	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
+	makefs_sects=$(( code_bytes / 512 ))
 
 	echo "Writing code image..."
 	nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
-	    "${NANO_METALOG}" "${makefs_sectors}" "${NANO_OBJ}/_.disk.part" \
+	    "${NANO_METALOG}" "${makefs_sects}" "${NANO_OBJ}/_.disk.part" \
 	    "${NANO_WORLDDIR}"
 	mv "${NANO_OBJ}/_.disk.part" "${NANO_DISKIMGDIR}/_.disk.image"
 
@@ -299,7 +330,8 @@ create_code_slice() {
 
 #
 # Assemble the final GPT disk image with optional EFI/BIOS boot partitions,
-# root A/B, cfg, and data partitions using mkimg
+# root A/B, cfg, and data partitions using mkimg.  Builds root images directly
+# from NANO_WORLDDIR without a metalog spec.  Used for normal (root) builds.
 #
 create_diskimage() {
 	pprint 2 "build diskimage"
@@ -314,11 +346,144 @@ create_diskimage() {
 	code1_line=$(partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
-    code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
-	makefs_sectors=$(( code_bytes / 512 ))
+	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
+	makefs_sects=$(( code_bytes / 512 ))
 
-    # Always start from 1MiB boundary
-    first_start_bytes=$(( ((1024 * 1024 + NANO_SECTOR_SIZE - 1) / NANO_SECTOR_SIZE) * NANO_SECTOR_SIZE ))
+	# Always start from 1MiB boundary
+	first_start_bytes=$(( ((1024 * 1024 + NANO_SECTOR_SIZE - 1) / NANO_SECTOR_SIZE) * NANO_SECTOR_SIZE ))
+
+	img=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
+
+	espfile=""
+	espopts=""
+	espfile2=""
+	espopts2=""
+	pmbr=""
+	gptboot=""
+	swapimage=""
+
+	# EFI System Partition(s) — for UEFI
+	if nano_boot_type_is UEFI; then
+		espfile=$(mktemp /tmp/nanobsd-efi.XXXXXX)
+		make_esp_file "${espfile}" "${NANO_EFI_BOOTPART_SIZE}" \
+		    "${NANO_WORLDDIR}/boot/loader.efi" \
+		    "gpt/${NANO_NAME}1"
+		espopts="-p efi/efiboot0:=${espfile}:${first_start_bytes}"
+		if [ "${NANO_IMAGES}" -gt 1 ]; then
+			espfile2=$(mktemp /tmp/nanobsd-efi2.XXXXXX)
+			make_esp_file "${espfile2}" "${NANO_EFI_BOOTPART_SIZE}" \
+			    "${NANO_WORLDDIR}/boot/loader.efi" \
+			    "gpt/${NANO_NAME}2"
+			espopts2="-p efi/efiboot1:=${espfile2}"
+		fi
+	fi
+
+	# PMBR + freebsd-boot — for BIOS
+	if nano_boot_type_is BIOS; then
+		if [ -f "${NANO_WORLDDIR}/boot/pmbr" ]; then
+			pmbr="-b ${NANO_WORLDDIR}/boot/pmbr"
+		fi
+		if [ -f "${NANO_WORLDDIR}/boot/gptboot" ]; then
+			if ! nano_boot_type_is UEFI; then
+				gptboot="-p freebsd-boot:=${NANO_WORLDDIR}/boot/gptboot:${first_start_bytes}"
+			else
+				gptboot="-p freebsd-boot:=${NANO_WORLDDIR}/boot/gptboot"
+			fi
+		fi
+	fi
+
+	if [ "${NANO_IMAGES}" -gt 1 ] && [ "${NANO_INIT_IMG2}" -gt 0 ]; then
+		echo "Duplicating to second image..."
+		tgt_switch_root_fstab "${NANO_SLICE_ROOT}" "${NANO_SLICE_ALTROOT}"
+		makefs -t ffs -S "${NANO_UFS_SECTOR_SIZE}" \
+		    -Z ${NANO_MAKEFS} -o minfree=0,optimization=space \
+		    -N "${NANO_WORLDDIR}/etc" -s "${makefs_sects}b" \
+		    -T "${NANO_TIMESTAMP}" \
+		    "${NANO_OBJ}/_.altroot.part" "${NANO_WORLDDIR}"
+		tgt_switch_root_fstab "${NANO_SLICE_ALTROOT}" "${NANO_SLICE_ROOT}"
+		altroot="-p freebsd-ufs/${NANO_NAME}2:=${NANO_OBJ}/_.altroot.part"
+	else
+		altroot="-p freebsd-ufs/${NANO_NAME}2::$code_bytes"
+	fi
+	if [ "${NANO_INIT_IMG2}" -eq 0 ]; then
+		altroot="-p freebsd-ufs/${NANO_NAME}2::$code_bytes"
+	fi
+
+	# cfg/swap/data sizes in _.partitioning are in NANO_SECTOR_SIZE units,
+	# _populate_*_part expects 512-byte blocks for nano_makefs
+	cfg_line=$(( code1_line + NANO_IMAGES ))
+	cfg_sects=$(awk "NR==${cfg_line} {print \$2}" "${NANO_LOG}/_.partitioning")
+	_populate_cfg_part "${NANO_OBJ}/_.cfg.part" "${NANO_CFGDIR}" \
+	    "${NANO_SLICE_CFG}" "${cfg_sects}" "${NANO_METALOG_CFG}"
+	cfgimage="-p freebsd-ufs/cfg:=${NANO_OBJ}/_.cfg.part"
+
+	if [ "${NANO_SWAPSIZE}" -ne 0 ]; then
+		swap_line=$(( cfg_line + 1 ))
+		swap_sects=$(awk "NR==${swap_line} {print \$2}" "${NANO_LOG}/_.partitioning")
+		swap_bytes=$(( swap_sects * NANO_SECTOR_SIZE ))
+		swapimage="-p freebsd-swap/swap0::${swap_bytes}"
+		data_line=$(( cfg_line + 2 ))
+	else
+		data_line=$(( cfg_line + 1 ))
+	fi
+
+	if [ -n "${NANO_SLICE_DATA}" ] &&
+	    [ "${NANO_SLICE_CFG}" = "${NANO_SLICE_DATA}" ] &&
+	    [ "${NANO_DATASIZE}" -ne 0 ]; then
+		pprint 2 "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
+		exit 2
+	fi
+	if [ "${NANO_DATASIZE}" -ne 0 ] && [ -n "${NANO_SLICE_DATA}" ]; then
+		data_sects=$(awk "NR==${data_line} {print \$2}" "${NANO_LOG}/_.partitioning")
+		_populate_data_part "${NANO_OBJ}/_.data.part" "${NANO_DATADIR}" \
+		    "${NANO_SLICE_DATA}" "${data_sects}" "${NANO_METALOG_DATA}"
+		dataimage="-p freebsd-ufs/data:=${NANO_OBJ}/_.data.part"
+	fi
+
+	echo "Writing out gpt ${NANO_IMGNAME}..."
+	mkimg -s gpt -P "${NANO_SECTOR_SIZE}" -C "$((NANO_MEDIASIZE * NANO_SECTOR_SIZE))" \
+	    ${pmbr} \
+	    ${espopts} \
+	    ${espopts2} \
+	    ${gptboot} \
+	    -p "freebsd-ufs/${NANO_NAME}1:=${NANO_DISKIMGDIR}/_.disk.image" \
+	    ${altroot} \
+	    ${cfgimage} \
+	    ${swapimage} \
+	    ${dataimage} \
+	    -o "${img}"
+
+	[ -n "${espfile}" ] && rm -f "${espfile}"
+	[ -n "${espfile2}" ] && rm -f "${espfile2}"
+	rm -f "${NANO_OBJ}/_.altroot.part" \
+	    "${NANO_OBJ}/_.cfg.part" \
+	    "${NANO_OBJ}/_.data.part"
+
+	) > ${NANO_LOG}/_.di 2>&1
+}
+
+#
+# Assemble the final GPT disk image using mkimg with metalog-based root images.
+# Used for nopriv (-U) source builds where file ownership lives in the metalog.
+#
+_create_diskimage() {
+	pprint 2 "build diskimage"
+	pprint 3 "log: ${NANO_OBJ}/_.di"
+
+	(
+	local altroot cfgimage dataimage swapimage espfile espopts espfile2 espopts2 \
+        pmbr gptboot img code1_line code_sects \
+        code_bytes makefs_sects first_start_bytes cfg_line cfg_sects \
+        swap_line swap_sects swap_bytes data_line data_sects
+
+	code1_line=$(partitioning_code1_line)
+
+	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
+	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
+	makefs_sects=$(( code_bytes / 512 ))
+
+	# Always start from 1MiB boundary
+	first_start_bytes=$(( ((1024 * 1024 + NANO_SECTOR_SIZE - 1) / NANO_SECTOR_SIZE) * NANO_SECTOR_SIZE ))
 
 	img=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 
@@ -364,12 +529,12 @@ create_diskimage() {
 		echo "Duplicating to second image..."
 		tgt_switch_root_fstab "${NANO_SLICE_ROOT}" "${NANO_SLICE_ALTROOT}"
 		nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
-		    "${NANO_METALOG}" "${makefs_sectors}" "${NANO_OBJ}/_.altroot.part" \
+		    "${NANO_METALOG}" "${makefs_sects}" "${NANO_OBJ}/_.altroot.part" \
 		    "${NANO_WORLDDIR}"
 		tgt_switch_root_fstab "${NANO_SLICE_ALTROOT}" "${NANO_SLICE_ROOT}"
 		altroot="-p freebsd-ufs/${NANO_NAME}2:=${NANO_OBJ}/_.altroot.part"
 	else
-        altroot="-p freebsd-ufs/${NANO_NAME}2::$code_bytes"
+		altroot="-p freebsd-ufs/${NANO_NAME}2::$code_bytes"
 	fi
 	if [ "${NANO_INIT_IMG2}" -eq 0 ]; then
 		altroot="-p freebsd-ufs/${NANO_NAME}2::$code_bytes"

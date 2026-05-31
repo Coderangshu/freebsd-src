@@ -51,6 +51,18 @@ NANO_PACKAGE_LIST="*"
 # where package metadata gets placed
 NANO_PKG_META_BASE=/var/db
 
+# Set NANO_PKGLIST to a ports pkglist file to trigger an automatic Poudriere
+# build for cust_pkgng() to install packages.
+# NANO_PACKAGE_DIR is set automatically to the Poudriere output directory.
+NANO_PKGLIST=""				        # path to pkglist file (ports origins, one per line)
+NANO_POUDRIERE_JAIL="nanobsd"		# poudriere jail name
+NANO_POUDRIERE_PORTS="latest"		# poudriere ports tree name
+NANO_POUDRIERE_ZPOOL=""			    # ZFS pool for poudriere (required when NANO_PKGLIST set)
+NANO_POUDRIERE_DATA="/usr/local/poudriere/data"
+NANO_POUDRIERE_CONF="/usr/local/etc/poudriere.conf"
+NANO_POUDRIERE_PORTS_URL="https://github.com/freebsd/freebsd-ports.git"
+NANO_POUDRIERE_PORTS_BRANCH="main"
+
 # Path to mtree file to apply to anything copied by cust_install_files().
 # If you specify this, the mtree file *must* have an entry for every file and
 # directory located in Files
@@ -469,10 +481,7 @@ nano_pkgbase_list() {
 	target="$1"
 	list=""
 
-	# For precompiled builds, pkg comes from the online FreeBSD-ports repo and is
-	# installed explicitly.  For local source builds, host pkg is used to install
-	# world and kernel, so no standalone pkg package is needed (or available)
-	# in the local repo.
+    # pkg is installed from pkgbase server
 	$do_precompiled && { [ "$target" = "world" ] || [ -z "$target" ]; } && list="pkg"
 
 	for package in $NANO_PKGBASE_LIST; do
@@ -558,7 +567,7 @@ tgt_pkg_update_file_path_etc_local() {
 
 # Run pkg(8) with the configured ABI, repo, and cache settings
 pkg_cmd() {
-	pkg --repo-conf-dir "$(nano_pkg_repos_dir)" \
+	pkg --repo-conf-dir "$(nano_pkg_conf_dir)" \
 	    -o ABI="$NANO_ABI" \
 	    -o ASSUME_ALWAYS_YES=yes \
 	    -o IGNORE_OSVERSION=yes \
@@ -586,36 +595,22 @@ tgt_pkg_chroot() {
 	pkg_cmd --chroot "$NANO_WORLDDIR" "$@"
 }
 
-# Return the directory used to cache downloaded packages
-nano_pkg_cachedir() {
-	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
-}
-
 # Return the directory where pkg repository configuration files are written for the build.
-nano_pkg_repos_dir() {
+nano_pkg_conf_dir() {
 	echo "${NANO_OBJ}/_.pkg"
 }
 
+#
 # Return the directory where "make packages" places locally built pkgbase packages
-nano_local_pkgbase_repodir() {
-	echo "${NANO_OBJ}${NANO_SRC}/repo"
+# Or where precompiled pkgs are cached
+# 
+nano_pkgbase_repodir() {
+	echo "${NANO_OBJ}/_.cache"
 }
 
-# Write the pkg repository config for locally built pkgbase packages
-nano_local_pkgbase_repo_conf() {
-	local repodir
-	repodir=$(nano_local_pkgbase_repodir)
-	mkdir -p "$(nano_pkg_repos_dir)"
-	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
-FreeBSD-ports: {
-  enabled: no
-}
-FreeBSD-base: {
-  url: "file://${repodir}/\${ABI}/latest",
-  signature_type: "none",
-  enabled: yes
-}
-EOF
+# Return the directory used to cache downloaded packages
+nano_pkg_cachedir() {
+	echo "$(nano_pkgbase_repodir)/${NANO_ABI}/latest"
 }
 
 # Copy FreeBSD pkg signing key fingerprints from the source tree
@@ -627,13 +622,19 @@ nano_pkg_freebsd_repo_keys() {
 	)
 }
 
+# XXXJL check with ashish/jrm if it is OK to clobber the cachedir like this
+# XXXJL add support for local FINGERPRINTS
+nano_pkg_repo() {
+	pkg_cmd -o INSTALL_AS_USER=yes repo "$(nano_pkg_cachedir)"
+}
+
 # Generate a FreeBSD.conf package repository configuration file
 # XXXJL try setting CONSERVATIVE_UPGRADE=no on the builder,
 # if it fails, we must set it explicitly in pkg_cmd
 nano_pkg_repo_conf() {
-	rm -rf "$(nano_pkg_repos_dir)"
-	mkdir -p "$(nano_pkg_repos_dir)"
-	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
+	rm -rf "$(nano_pkg_conf_dir)"
+	mkdir -p "$(nano_pkg_conf_dir)"
+	cat > "$(nano_pkg_conf_dir)/FreeBSD.conf" <<EOF
 FreeBSD-ports: {
   url: "pkg+https://pkg.freebsd.org/\${ABI}/${NANO_PORTS_DIR}",
   mirror_type: "srv",
@@ -650,18 +651,32 @@ FreeBSD-base: {
 }
 EOF
 # XXXJL FINGERPRINTS!
-	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
+	cat > "$(nano_pkg_conf_dir)/FreeBSD-local.conf" <<EOF
 FreeBSD-local: {
-  url: "file:///$(nano_pkg_cachedir)",
+  url: "file://$(nano_pkg_cachedir)",
   enabled: no
 }
 EOF
 }
 
-# XXXJL check with ashish/jrm if it is OK to clobber the cachedir like this
-# XXXJL add support for local FINGERPRINTS
-nano_pkg_repo() {
-	pkg_cmd repo "$(nano_pkg_cachedir)"
+# Write the pkg repository config for locally built pkgbase packages
+nano_local_pkg_repo_conf() {
+	mkdir -p "$(nano_pkg_conf_dir)"
+	cat > "$(nano_pkg_conf_dir)/FreeBSD.conf" <<EOF
+FreeBSD-ports: {
+  enabled: no
+}
+FreeBSD-base: {
+  enabled: no
+}
+EOF
+	cat > "$(nano_pkg_conf_dir)/FreeBSD-local.conf" <<EOF
+FreeBSD-local: {
+  url: "file://$(nano_pkg_cachedir)",
+  signature_type: "none",
+  enabled: yes
+}
+EOF
 }
 
 nano_validate_pkgbase_list() {
@@ -701,8 +716,12 @@ nano_fetch_pkgbase_packages() {
 		tgt_pkg fetch -d $(nano_pkgbase_list)
 		nano_pkg_repo
 	else
+		if [ -z "$(find "$(nano_pkg_cachedir)" -maxdepth 1 -name '*.pkg' 2>/dev/null | head -1)" ]; then
+			err "No packages in cache $(nano_pkg_cachedir). Run without -n to download."
+		fi
 		pprint 2 "Using existing packages (as instructed)"
 	fi
+	nano_local_pkg_repo_conf
 	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
@@ -722,7 +741,7 @@ nano_fetch_local_packages() {
 		mkdir -p "$(nano_pkg_cachedir)"
 	fi
 
-	nano_local_pkgbase_repo_conf
+	nano_local_pkg_repo_conf
 	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
@@ -1018,7 +1037,7 @@ build_packages() {
 	nano_make_build_env
 	set -o xtrace
 	cd "${NANO_SRC}"
-	${NANO_PMAKE} packages
+	${NANO_PMAKE} packages REPODIR="$(nano_pkgbase_repodir)"
 	) > ${MAKEOBJDIRPREFIX}/_.bp 2>&1
 }
 
@@ -1070,14 +1089,17 @@ install_world() {
 
 	(
 	set -o xtrace
-    # XXXAS is this necessary here?
-	pkg_cmd update
+	tgt_pkg update -r FreeBSD-local
 	if [ -n "$(nano_pkgbase_world_list)" ]; then
-		pkg_cmd install -U -y $(nano_pkgbase_world_list)
+		tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_world_list)
 	fi
+	nano_pkg_freebsd_repo_keys
+	nano_pkg_repo_conf
+	tgt_pkg install -r FreeBSD-ports pkg
+	nano_local_pkg_repo_conf
 	# XXXJL pkg triggers should not need a chroot (lua script)
 	if ! $do_root; then
-		pkg_cmd triggers
+		tgt_pkg triggers
 	else
 		tgt_pkg_chroot triggers
 	fi
@@ -1148,7 +1170,7 @@ install_kernel() {
 	(
 	set -o xtrace
 	if [ -n "$(nano_pkgbase_kernel_list)" ]; then
-		pkg_cmd install -U -y $(nano_pkgbase_kernel_list)
+		tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_kernel_list)
 	fi
 	) > ${NANO_LOG}/_.ik 2>&1
 }
@@ -1261,17 +1283,18 @@ fixup_before_diskimage() {
 	# impossible to trap, so go ahead remove the size= keyword. For this
 	# narrow use, it doesn't buy us any protection and just gets in the way.
 	# The dedup tool's output must be sorted due to limitations in awk
-	if [ -n "${NANO_METALOG}" ]; then
+	if [ -n "${NANO_METALOG}" ] && ! $do_root; then
 		pprint 2 "Fixing metalog"
 
 		if [ -z "$NANO_NOPKGBASE" ]; then
 			_xxx_pkg_metalog
+			_xxx_run_pkg_scripts
 		fi
 
 		cp ${NANO_METALOG} ${NANO_METALOG}.pre
 		echo "/set uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" > ${NANO_METALOG}
-		cat ${NANO_METALOG}.pre | ${NANO_TOOLS}/mtree-dedup.awk | \
-		    sort -u | mtree -C -K uname,gname,tags -R size,time >> ${NANO_METALOG}
+        cat ${NANO_METALOG}.pre | ${NANO_TOOLS}/mtree-dedup.awk | \
+            sort -u | mtree -C -K uname,gname,tags -R size,time >> ${NANO_METALOG}
 	fi
 }
 
@@ -1317,7 +1340,7 @@ setup_nanobsd() {
 			sed -i "" "\=^\./usr/local/etc =d" "$NANO_METALOG"
 			sed -i "" -e "s=^\./usr/local/etc/=./etc/local/=g" "$NANO_METALOG"
 		fi
-		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		if [ -z "$NANO_NOPKGBASE" ]; then
 			tgt_pkg_update_file_path_etc_local
 		fi
 	fi
@@ -1728,6 +1751,94 @@ cust_install_files() (
 )
 
 #######################################################################
+# Poudriere helpers (called automatically by cust_pkgng when NANO_PKGLIST is set)
+
+# Set NANO_POUDRIERE_CONF with the required ZPOOL and BUILD_AS_NON_ROOT settings
+_nano_poudriere_conf() {
+	local conf="${NANO_POUDRIERE_CONF}"
+
+	if [ ! -f "${conf}" ]; then
+		if [ -f "${conf}.sample" ]; then
+			cp "${conf}.sample" "${conf}"
+		else
+			touch "${conf}"
+		fi
+	fi
+
+	# Set/replace ZPOOL line
+	if grep -q '^#\{0,1\}ZPOOL=' "${conf}" 2>/dev/null; then
+		sed -i '' "s|^#\{0,1\}ZPOOL=.*|ZPOOL=${NANO_POUDRIERE_ZPOOL}|" "${conf}"
+	else
+		echo "ZPOOL=${NANO_POUDRIERE_ZPOOL}" >> "${conf}"
+	fi
+
+	# Set/replace BUILD_AS_NON_ROOT line
+	if grep -q '^#\{0,1\}BUILD_AS_NON_ROOT=' "${conf}" 2>/dev/null; then
+		sed -i '' 's|^#\{0,1\}BUILD_AS_NON_ROOT=.*|BUILD_AS_NON_ROOT=no|' "${conf}"
+	else
+		echo "BUILD_AS_NON_ROOT=no" >> "${conf}"
+	fi
+}
+
+# Build ports packages via Poudriere using NANO_WORLDDIR as the null-mounted
+# jail base.  Sets NANO_PACKAGE_DIR to the resulting All/ directory so that
+# cust_pkgng() can install the packages into the image.
+_nano_poudriere_build() {
+	if ! command -v poudriere > /dev/null 2>&1; then
+		err "poudriere not found; install ports-mgmt/poudriere-devel"
+	fi
+	if [ ! -f "${NANO_PKGLIST}" ]; then
+		err "NANO_PKGLIST=${NANO_PKGLIST} not found"
+	fi
+	if [ -z "${NANO_POUDRIERE_ZPOOL}" ]; then
+		err "NANO_POUDRIERE_ZPOOL must be set for Poudriere build"
+	fi
+
+	pprint 2 "poudriere: configure ${NANO_POUDRIERE_CONF}"
+	_nano_poudriere_conf
+
+	mkdir -p /usr/ports/distfiles
+
+	# Derive the OS release string from the installed world
+	local _ver
+	_ver=$(chroot ${NANO_WORLDDIR} /bin/freebsd-version -u 2>/dev/null || uname -r)
+
+	# Create poudriere jail (null-mounted from NANO_WORLDDIR)
+	if poudriere jail -l -q 2>/dev/null | awk '{print $1}' | grep -qx "${NANO_POUDRIERE_JAIL}"; then
+		pprint 2 "poudriere jail ${NANO_POUDRIERE_JAIL} already exists, skipping creation"
+	else
+		pprint 2 "poudriere: create jail ${NANO_POUDRIERE_JAIL} from ${NANO_WORLDDIR} (${_ver})"
+		poudriere jail -c \
+		    -j "${NANO_POUDRIERE_JAIL}" \
+		    -M "${NANO_WORLDDIR}" \
+		    -m null \
+		    -v "${_ver}"
+	fi
+
+	# Create ports tree
+	if poudriere ports -l -q 2>/dev/null | awk '{print $1}' | grep -qx "${NANO_POUDRIERE_PORTS}"; then
+		pprint 2 "poudriere ports tree ${NANO_POUDRIERE_PORTS} already exists, skipping creation"
+	else
+		pprint 2 "poudriere: create ports tree ${NANO_POUDRIERE_PORTS}"
+		poudriere ports -c \
+		    -U "${NANO_POUDRIERE_PORTS_URL}" \
+		    -B "${NANO_POUDRIERE_PORTS_BRANCH}" \
+		    -p "${NANO_POUDRIERE_PORTS}"
+	fi
+
+	# Build packages
+	pprint 2 "poudriere: bulk build from ${NANO_PKGLIST}"
+	poudriere bulk \
+	    -j "${NANO_POUDRIERE_JAIL}" \
+	    -b "${NANO_POUDRIERE_PORTS}" \
+	    -p "${NANO_POUDRIERE_PORTS}" \
+	    -f "${NANO_PKGLIST}"
+
+	NANO_PACKAGE_DIR="${NANO_POUDRIERE_DATA}/packages/${NANO_POUDRIERE_JAIL}-${NANO_POUDRIERE_PORTS}/All"
+	pprint 2 "poudriere: packages in ${NANO_PACKAGE_DIR}"
+}
+
+#######################################################################
 # Install packages from ${NANO_PACKAGE_DIR}
 
 #
@@ -1735,6 +1846,11 @@ cust_install_files() (
 # into NANO_WORLDDIR via a nullfs-mounted chroot
 #
 cust_pkgng() {
+	# If a ports pkglist is provided, build packages with Poudriere first
+	if [ -n "${NANO_PKGLIST}" ]; then
+		_nano_poudriere_build
+	fi
+
 	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
 	local PKG_CONF="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
 	local PKGCMD="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"

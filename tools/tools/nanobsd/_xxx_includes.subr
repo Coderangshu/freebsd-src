@@ -117,8 +117,11 @@ _xxx_pkg_metalog() {
 	trap - 1 2 15 EXIT
 	rm -f "$tmp_metalog"
 
+	# Add directories that exist on disk but are not owned by any package
+	_xxx_get_untagged_directories_from_mtree BSD.usr.dist /usr
+
 	# Remove the directory entries for the symlinked paths
-	sed -i "" "\=^\./usr/local/etc = { / type=dir / d; }" "$NANO_METALOG"
+	sed -i "" "\=^\./usr/local/etc[/ ]= { / type=dir / d; }" "$NANO_METALOG"
 	sed -i "" "\=^\./tmp = { / type=dir / d; }" "$NANO_METALOG"
 
 	# These directories may end up being generated many times
@@ -162,6 +165,7 @@ _xxx_run_pkg_scripts() {
 		# Add the services db to the metalog
 		if [ -f "${NANO_WORLDDIR}/var/db/services.db" ]; then
 			echo "./var/db/services.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
+			echo "./conf/base/var/db type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
 			echo "./conf/base/var/db/services.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
 		fi
 	fi
