@@ -69,6 +69,9 @@ if [ -z $NANO_NAME ]; then
 	echo "NANO_NAME not defined. Use foo.cfg instead."
 fi
 
+# We define our own imaging plan, so instruct nanobsd not to define its own.
+NANO_PLAN=embedded
+
 NANO_SLICE_FAT_SIZE=32m
 NANO_SLICE_CFG_SIZE=32m
 

@@ -28,6 +28,18 @@
 
 set -e
 
+legacy() {
+    # Pull in legacy stuff on demand
+    . "${topdir}/legacy.sh"
+}
+
+is_defined() {
+	case $(type $1 2>/dev/null) in
+	*function) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 nanobsd_sh=$(realpath $0)
 topdir=$(dirname ${nanobsd_sh})
 . "${topdir}/_xxx_includes.subr"
@@ -47,9 +59,6 @@ do_image=true
 do_native_xtools=false
 do_precompiled=false
 do_prep_image=true
-
-# Pull in legacy stuff for now automatically
-. "${topdir}/legacy.sh"
 
 set +e
 args=$(getopt BKXWbc:fhiIknPpqUvw $*)
@@ -162,6 +171,10 @@ if [ $# -gt 0 ]; then
 	echo "$0: Extraneous arguments supplied"
 	usage
 fi
+
+# Transition hack -- If you get this warning, add 'legacy' to your nano config file
+[ -n "$NANO_PLAN" ] || echo "Warning: no plan defined, assuming legacy config."
+[ -n "$NANO_PLAN" ] || legacy
 
 #######################################################################
 # And then it is as simple as that...
