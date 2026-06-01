@@ -654,10 +654,7 @@ calculate_partitioning() {
 }
 
 # These don't make any sense to this strategy, so stub them out.
-create_code_slice() {
-}
-
-_create_code_slice() {
+create_code_partition() {
 }
 
 # Each major disk scheme has its own routine. Generally

@@ -109,6 +109,14 @@ is_defined calculate_partitioning || calculate_partitioning() {
 	' > ${NANO_LOG}/_.partitioning
 }
 
+create_code_partition() {
+	if [ -z "${NANO_NOPRIV_BUILD}" ]; then
+		create_code_slice
+	else
+		_create_code_slice
+	fi
+}
+
 #
 # Create a BSD-labeled root code partition image using mdconfig/gpart,
 # populate it from NANO_WORLDDIR, and write _.disk.image

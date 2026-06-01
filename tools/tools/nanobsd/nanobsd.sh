@@ -274,11 +274,7 @@ else
 fi
 if $do_code; then
 	calculate_partitioning
-	if [ -z "${NANO_NOPRIV_BUILD}" ]; then
-		create_code_slice
-	else
-		_create_code_slice
-	fi
+	create_code_partition
 	if $do_image; then
 		if [ -z "${NANO_NOPRIV_BUILD}" ]; then
 			create_diskimage
