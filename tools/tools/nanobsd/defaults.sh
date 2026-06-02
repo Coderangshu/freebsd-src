@@ -1215,6 +1215,11 @@ setup_nanobsd() {
 		fi
 	done
 
+	# Esure the /conf/default/var/db/pkg directory is present
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_dir conf/default/var/db/pkg
+	fi
+
 	if [ -n "$NANO_METALOG" ]; then
 		cat "${NANO_METALOG}.conf" >> "${NANO_METALOG}"
 		rm -f "${NANO_METALOG}.conf"
