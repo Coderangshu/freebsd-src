@@ -621,6 +621,26 @@ nano_pkg_repo() {
 	pkg_cmd repo "$(nano_pkg_cachedir)"
 }
 
+nano_pkg_disable_repos() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	# XXXJL is it better to just rewrite the entire file?
+	sed -i "" -E \
+	    -e "s/([[:space:]]*enabled[[:space:]]*:[[:space:]]*)(yes|true|on)/\1no/" \
+	    -e "s/To disable a repository/To enable a repository/" \
+	    -e "s/FreeBSD-ports: \{ enabled: no \}/FreeBSD-ports: { enabled: yes }/" \
+	    -e "s/FreeBSD-ports-kmods: \{ enabled: no \}/FreeBSD-ports-kmods: { enabled: yes }/" \
+	    -e "s/Note that the FreeBSD-base repository is disabled by default\./Note that all repositories are disabled by default./" \
+	    etc/pkg/FreeBSD.conf
+
+	if $do_precompiled; then
+		tgt_pkg_update_file_sha256 etc/pkg/FreeBSD.conf
+		tgt_pkg_update_config_files_content etc/pkg/FreeBSD.conf
+	fi
+	)
+}
+
 #
 # Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache,
 # write the pkg repo config, and fetch pkgbase packages
@@ -1201,6 +1221,11 @@ setup_nanobsd() {
 	# the symlink not being here causes problems.  It never hurts
 	# to have the symlink in error though
 	tgt_dir2symlink usr/local/etc ../../etc/local 0755
+
+	# Disable all package repositories
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		nano_pkg_disable_repos
+	fi
 
 	for d in var etc; do
 		# Link /$d under /conf
