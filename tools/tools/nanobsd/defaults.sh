@@ -535,6 +535,37 @@ tgt_pkg_update_file_path_etc_local() {
 	EOF
 }
 
+#
+# Swap the /tmp ID with the /var/tmp ID in the pkg_directories table.
+# Remove the /tmp directory from the directories table.
+#
+tgt_pkg_link_tmp_var_tmp() {
+	local tmp_id var_tmp_id
+
+	tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/tmp';")
+	var_tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/var/tmp';")
+
+	if [ -z "$tmp_id" ] || [ -z "$var_tmp_id" ]; then
+		return
+	fi
+
+	tgt_pkg shell <<-EOF
+		BEGIN TRANSACTION;
+
+		-- Change any package relation from the /tmp ID to the /var/tmp ID
+		UPDATE OR IGNORE pkg_directories
+		SET directory_id = ${var_tmp_id} WHERE directory_id = ${tmp_id};
+
+		-- Remove residual /tmp remnants left behind by "OR IGNORE"
+		DELETE FROM pkg_directories WHERE directory_id = ${tmp_id};
+
+		-- Remove /tmp from the directories table
+		DELETE FROM directories WHERE id = ${tmp_id};
+
+		COMMIT;
+	EOF
+}
+
 # Run pkg(8) with the configured ABI, repo, and cache settings
 pkg_cmd() {
 	pkg --repo-conf-dir "$(nano_pkg_repos_dir)" \
@@ -1264,6 +1295,9 @@ setup_nanobsd() {
 		sed -i "" "\=^\./tmp =d" "$NANO_METALOG"
 	fi
 	tgt_dir2symlink tmp var/tmp 1777
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_link_tmp_var_tmp
+	fi
 
 	) > ${NANO_LOG}/_.dl 2>&1
 }
