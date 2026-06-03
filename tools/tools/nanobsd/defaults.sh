@@ -566,6 +566,16 @@ tgt_pkg_link_tmp_var_tmp() {
 	EOF
 }
 
+# Timestamp all files with NANO_TIMESTAMP in the pkg database
+tgt_pkg_time_timestamp() {
+	if [ -z "$NANO_TIMESTAMP" ]; then
+		return
+	fi
+
+	tgt_pkg shell "UPDATE files SET mtime = ${NANO_TIMESTAMP};"
+	tgt_pkg shell "UPDATE packages SET time = ${NANO_TIMESTAMP};"
+}
+
 # Run pkg(8) with the configured ABI, repo, and cache settings
 pkg_cmd() {
 	pkg --repo-conf-dir "$(nano_pkg_repos_dir)" \
@@ -1212,6 +1222,10 @@ fixup_before_diskimage() {
 		echo "/set uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" > ${NANO_METALOG}
 		cat ${NANO_METALOG}.pre | ${NANO_TOOLS}/mtree-dedup.awk | \
 		    sort -u | mtree -C -K uname,gname,tags -R size,time >> ${NANO_METALOG}
+	fi
+
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_time_timestamp
 	fi
 }
 
