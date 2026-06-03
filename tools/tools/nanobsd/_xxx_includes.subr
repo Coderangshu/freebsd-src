@@ -154,6 +154,19 @@ _xxx_pkg_metalog() {
 	sed -i "" "\=^\./root =s/mode=0\{0,1\}755/mode=0750/g" "$NANO_METALOG"
 }
 
+# Fix directory permissions in the pkg database
+# https://github.com/freebsd/pkg/issues/2658
+# FreeBSD-bootloader-dev-16.snap20251026024203: /usr/share/man/man3/libsa.3.gz [perm] --------- -> r--r--r--
+# FreeBSD-runtime-16.snap20260601092744: /root [perm] rwxr-x--- -> rwxr-xr-x
+# FreeBSD-utilities-16.snap20260531173731: /root [perm] rwxr-x--- -> rwxr-xr-x
+_xxx_fix_pkg_permissions() {
+	tgt_pkg shell \
+	    "UPDATE files SET perm = 292 WHERE path = '/usr/share/man/man3/libsa.3.gz';"
+	tgt_pkg shell "UPDATE directories SET perm = 488 WHERE path = '/root';"
+
+	chmod 0750 ${NANO_WORLDDIR}/root
+}
+
 # Manually run triggers and package scripts
 # Ideally the scripts and triggers should have a @generate keyword that adds them
 # to the metalog

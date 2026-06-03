@@ -1225,6 +1225,7 @@ fixup_before_diskimage() {
 	fi
 
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		_xxx_fix_pkg_permissions
 		tgt_pkg_time_timestamp
 	fi
 }
