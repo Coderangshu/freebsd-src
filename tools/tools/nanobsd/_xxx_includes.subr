@@ -145,6 +145,11 @@ _xxx_pkg_metalog() {
 
 	# These directories may end up being generated many times
 	# by pkg -o METALOG and the first one may not have the right permissions
+	# in the database:
+	# https://github.com/freebsd/pkg/issues/2658
+	# FreeBSD-bootloader-dev-16.snap20251026024203: /usr/share/man/man3/libsa.3.gz [perm] --------- -> r--r--r--
+	# FreeBSD-runtime-16.snap20260601092744: /root [perm] rwxr-x--- -> rwxr-xr-x
+	# FreeBSD-utilities-16.snap20260531173731: /root [perm] rwxr-x--- -> rwxr-xr-x
 	sed -i "" "\=^\./etc/ntp =s/mode=0\{0,1\}755/mode=0700/g" "$NANO_METALOG"
 	sed -i "" "\=^\./root =s/mode=0\{0,1\}755/mode=0750/g" "$NANO_METALOG"
 }
