@@ -242,3 +242,14 @@ _xxx_tgt_pkg_triggers() {
 		tgt_pkg_chroot triggers
 	fi
 }
+
+#
+# XXXJL Ship without a pkg database by default, and include the SQL dump
+# on request via a cust_ script, that self-restores on firstboot.
+# This allows for deterministic pkgbase images
+# (semi-deterministic, as the dump will change every time)
+#
+_xxx_pkg_db_dump_or_vacuum() {
+	tgt_pkg shell "VACUUM; PRAGMA integrity_check;"
+	tgt_pkg shell ".dump" > ${NANO_OBJ}/_.pkg.sql
+}
