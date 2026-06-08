@@ -67,6 +67,28 @@ _xxx_add_missing_boot_dtb() {
 }
 
 #
+# Add an entry to the metalog
+# $1=file/direcrory, $2=mode (optional), $3=metalog file (optional)
+#
+metalog_add_data() {
+	local entry metalog mode type
+
+	entry="$1"
+	if [ -f "${NANO_WORLDDIR}/${entry}" ]; then
+		type="file"
+		mode=${2:-0644}
+	elif [ -d "${NANO_WORLDDIR}/${entry}" ]; then
+		type="dir"
+		mode=${2:-0755}
+	else
+		err "metalog_add_data: ${entry} not found"
+	fi
+	metalog=${3:-$NANO_METALOG}
+	printf "%s type=%s uname=%s gname=%s mode=%s\n" \
+	    "$entry" "$type" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" >> "$metalog"
+}
+
+#
 # Build NANO_METALOG from pkgbase package manifests,
 # regenerate system databases (passwd, caps, services, mandoc),
 # and add missing entries
@@ -75,20 +97,20 @@ _xxx_pkg_metalog() {
 	local files directories path
 
 	# Add the root entry
-	echo ". type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	metalog_add_data "."
 
 	_xxx_add_missing_boot_dtb
 
 	# https://github.com/freebsd/pkg/issues/2672
-	echo "./etc/local/periodic type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
-	echo "./etc/local/periodic/daily type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
-	echo "./etc/local/periodic/security type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
-	echo "./etc/local/periodic/weekly type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	metalog_add_data "./etc/local/periodic"
+	metalog_add_data "./etc/local/periodic/daily"
+	metalog_add_data "./etc/local/periodic/security"
+	metalog_add_data "./etc/local/periodic/weekly"
 	# /conf/base counterparts
-	echo "./conf/base/etc/local/periodic type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
-	echo "./conf/base/etc/local/periodic/daily type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
-	echo "./conf/base/etc/local/periodic/security type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
-	echo "./conf/base/etc/local/periodic/weekly type=dir uname=root gname=wheel mode=0755" >> "$NANO_METALOG"
+	metalog_add_data "./conf/base/etc/local/periodic"
+	metalog_add_data "./conf/base/etc/local/periodic/daily"
+	metalog_add_data "./conf/base/etc/local/periodic/security"
+	metalog_add_data "./conf/base/etc/local/periodic/weekly"
 
 	# Paths missing from the package manifest will default to
 	# root:wheel with 0755 permissions.
@@ -128,55 +150,46 @@ _xxx_pkg_metalog() {
 }
 
 # Manually run triggers and package scripts
+# Ideally the scripts and triggers should have a @generate keyword that adds them
+# to the metalog
+#
 _xxx_run_pkg_scripts() {
 	# Repopulate the passwd db
 	if [ -f "${NANO_WORLDDIR}/etc/master.passwd" ]; then
 		pwd_mkdb -d "${NANO_WORLDDIR}/etc" \
 		    "${NANO_WORLDDIR}/etc/master.passwd" 2>/dev/null || true
 		# Add the passwd db files to the metalog
-		for dbs in etc/pwd.db etc/spwd.db etc/passwd; do
-			[ -f "${NANO_WORLDDIR}/${dbs}" ] || continue
-			case "${dbs##*/}" in
-			spwd.db) _mode=0600 ;;
-			*)       _mode=0644 ;;
-			esac
-			printf './%s type=file uname=root gname=wheel mode=%s\n' \
-			    "${dbs}" "${_mode}" >> "$NANO_METALOG"
-			printf './conf/base/%s type=file uname=root gname=wheel mode=%s\n' \
-			    "${dbs}" "${_mode}" >> "$NANO_METALOG"
-		done
+		metalog_add_data "./etc/login.conf.db"
+		metalog_add_data "./etc/passwd"
+		metalog_add_data "./etc/pwd.db"
+		metalog_add_data "./etc/spwd.db" "0600"
+		metalog_add_data "./var/db/services.db"
 	fi
 	# Repopulate the capabilities db
 	if [ -f "${NANO_WORLDDIR}/etc/login.conf" ]; then
 		cap_mkdb "${NANO_WORLDDIR}/etc/login.conf" 2>/dev/null || true
 		# Add the capabilities db to the metalog
-		if [ -f "${NANO_WORLDDIR}/etc/login.conf.db" ]; then
-			echo "./etc/login.conf.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
-			echo "./conf/base/etc/login.conf.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
-		fi
+		metalog_add_data "./etc/login.conf.db"
+		metalog_add_data "./conf/base/etc/login.conf.db"
 	fi
 	# Repopulate the services db
 	if [ -f "${NANO_WORLDDIR}/etc/services" ]; then
 		services_mkdb -q -o "${NANO_WORLDDIR}/var/db/services.db" \
 		    "${NANO_WORLDDIR}/" 2>/dev/null || true
 		# Add the services db to the metalog
-		if [ -f "${NANO_WORLDDIR}/var/db/services.db" ]; then
-			echo "./var/db/services.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
-			echo "./conf/base/var/db/services.db type=file uname=root gname=wheel mode=0644" >> "$NANO_METALOG"
-		fi
+		metalog_add_data "./var/db/services.db"
+		metalog_add_data "./conf/base/var/db/services.db"
 	fi
 	# XXXJL certctl
 	if [ -f "${NANO_WORLDDIR}/etc/ssl/cert.pem" ]; then
-		echo "./etc/ssl/cert.pem type=file uname=root gname=wheel mode=0444" >> "$NANO_METALOG"
+		metalog_add_data "./etc/ssl/cert.pem" "0444"
+		metalog_add_data "./conf/base/etc/ssl/cert.pem" "0444"
 	fi
 	# Repopulate mandoc dbs and add to metalog
 	for mandir in usr/share/man usr/share/openssl/man; do
 		[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
 		makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
-		if [ -f "${NANO_WORLDDIR}/${mandir}/mandoc.db" ]; then
-			printf './%s/mandoc.db type=file uname=root gname=wheel mode=0644\n' \
-			    "${mandir}" >> "$NANO_METALOG"
-		fi
+		metalog_add_data "./${mandir}/mandoc.db"
 	done
 
 	# Add /sys symlink, we do run make distribution in install_etc()
