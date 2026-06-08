@@ -567,7 +567,13 @@ tgt_pkg_update_file_path_etc_local() {
 
 # Run pkg(8) with the configured ABI, repo, and cache settings
 pkg_cmd() {
-	pkg --repo-conf-dir "$(nano_pkg_conf_dir)" \
+	local install_as_user
+	if ! $do_root; then
+		# pkg add checks getenv("INSTALL_AS_USER"), not the pkg config system.
+		# Must inject into the actual process environment via env(1).
+		install_as_user="INSTALL_AS_USER=yes"
+	fi
+	env ${install_as_user} pkg --repo-conf-dir "$(nano_pkg_conf_dir)" \
 	    -o ABI="$NANO_ABI" \
 	    -o ASSUME_ALWAYS_YES=yes \
 	    -o IGNORE_OSVERSION=yes \
@@ -578,16 +584,13 @@ pkg_cmd() {
 
 # Run pkg(8) with NANO_WORLDDIR as rootdir
 tgt_pkg() {
-	local install_as_user metalog
+	local metalog
 
-	if ! $do_root; then
-		install_as_user="-o INSTALL_AS_USER=yes"
-	fi
 	if [ -n "$NANO_METALOG" ]; then
 		metalog="-o METALOG=${NANO_METALOG}"
 	fi
 
-	pkg_cmd --rootdir "$NANO_WORLDDIR" ${install_as_user} ${metalog} "$@"
+	pkg_cmd --rootdir "$NANO_WORLDDIR" ${metalog} "$@"
 }
 
 # Run pkg(8) in chroot mode against NANO_WORLDDIR
@@ -1097,12 +1100,7 @@ install_world() {
 	nano_pkg_repo_conf
 	tgt_pkg install -r FreeBSD-ports pkg
 	nano_local_pkg_repo_conf
-	# XXXJL pkg triggers should not need a chroot (lua script)
-	if ! $do_root; then
-		tgt_pkg triggers
-	else
-		tgt_pkg_chroot triggers
-	fi
+	_xxx_tgt_pkg_triggers
 	) > ${NANO_LOG}/_.iw 2>&1
 }
 
@@ -1843,31 +1841,54 @@ _nano_poudriere_build() {
 
 #
 # Bootstrap pkg and install all packages from NANO_PACKAGE_DIR
-# into NANO_WORLDDIR via a nullfs-mounted chroot
+# into NANO_WORLDDIR
 #
 cust_pkgng() {
-	# If a ports pkglist is provided, build packages with Poudriere first
 	if [ -n "${NANO_PKGLIST}" ]; then
-		_nano_poudriere_build
+		if ! $do_root; then
+			# Skip Poudriere if packages already exist in NANO_PACKAGE_DIR
+			# Error only when the directory is absent or empty.
+			local _pkgfound=false
+			for _f in "${NANO_PACKAGE_DIR}"/*.pkg "${NANO_PACKAGE_DIR}"/*.txz; do
+				[ -f "$_f" ] && _pkgfound=true && break
+			done
+			if [ ! -d "${NANO_PACKAGE_DIR}" ] || ! $_pkgfound; then
+				err "cust_pkgng: NANO_PKGLIST set but no packages found" \
+				    " in NANO_PACKAGE_DIR=${NANO_PACKAGE_DIR}." \
+				    " Pre-build with Poudriere (root) and set NANO_PACKAGE_DIR."
+			fi
+			pprint 2 "cust_pkgng (nopriv): using pre-built packages in ${NANO_PACKAGE_DIR}"
+		else
+			_nano_poudriere_build
+		fi
 	fi
 
-	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
-	local PKG_CONF="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
-	local PKGCMD="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"
-
-	# Ensure pkg.conf points pkg to where the package meta data lives
-	touch ${PKG_CONF}
-	if grep -Eiq '^PKG_DBDIR:.*' ${PKG_CONF}; then
-		sed -i -e "\|^PKG_DBDIR:.*|Is||PKG_DBDIR: "\"${NANO_PKG_META_BASE}/pkg\""|" ${PKG_CONF}
-	else
-		echo "PKG_DBDIR: \"${NANO_PKG_META_BASE}/pkg\"" >> ${PKG_CONF}
-	fi
-
-	# If the package directory doesn't exist, we're done
 	NANO_PACKAGE_DIR="$(realpath $NANO_PACKAGE_DIR)"
 	if [ ! -d ${NANO_PACKAGE_DIR} ]; then
 		echo "DONE 0 packages"
 		return 0
+	fi
+
+	if $do_root; then
+		_cust_pkgng_priv
+	else
+		_cust_pkgng_nopriv
+	fi
+}
+
+# Privileged path:  nullfs + devfs mount, chroot + pkg add
+_cust_pkgng_priv() {
+    local pkg_conf pkgcmd _pkgs _pkg todo
+	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
+	pkg_conf="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
+	pkgcmd="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"
+
+	# Ensure pkg.conf points pkg to where the package meta data lives
+	touch ${pkg_conf}
+	if grep -Eiq '^PKG_DBDIR:.*' ${pkg_conf}; then
+		sed -i -e "\|^PKG_DBDIR:.*|Is||PKG_DBDIR: "\"${NANO_PKG_META_BASE}/pkg\""|" ${pkg_conf}
+	else
+		echo "PKG_DBDIR: \"${NANO_PKG_META_BASE}/pkg\"" >> ${pkg_conf}
 	fi
 
 	# Find a pkg-* package
@@ -1886,31 +1907,96 @@ cust_pkgng() {
 	trap "nano_umount ${NANO_WORLDDIR}/dev; nano_umount ${NANO_WORLDDIR}/_.p ; rm -xrf ${NANO_WORLDDIR}/_.p" 1 2 15 EXIT
 
 	# Install pkg-* package
-	CR "${PKGCMD} add /_.p/${_NANO_PKG_PACKAGE}"
+	CR "${pkgcmd} add /_.p/${_NANO_PKG_PACKAGE}"
 
 	(
 		# Expand any glob characters in package list
 		cd "${NANO_PACKAGE_DIR}"
-		_PKGS=$(find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort -u)
+		_pkgs=$(find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort -u)
 
 		# Show todo
-		todo=$(echo "$_PKGS" | wc -l)
+		todo=$(echo "$_pkgs" | wc -l)
 		echo "=== TODO: $todo"
-		echo "$_PKGS"
+		echo "$_pkgs"
 		echo "==="
 
 		# Install packages
-		for _PKG in $_PKGS; do
-			CR "${PKGCMD} add /_.p/${_PKG}"
+		for _pkg in $_pkgs; do
+			CR "${pkgcmd} add /_.p/${_pkg}"
 		done
 	)
 
-	CR0 "${PKGCMD} info"
+	CR0 "${pkgcmd} info"
 
 	trap - 1 2 15 EXIT
 	nano_umount ${NANO_WORLDDIR}/dev
 	nano_umount ${NANO_WORLDDIR}/_.p
 	rm -xrf ${NANO_WORLDDIR}/_.p
+}
+
+#
+# Unprivileged path: pkg -r WORLDDIR -o INSTALL_AS_USER=yes add /abs/path
+#   - Requires NANO_PACKAGE_DIR to point to poudriere (root) pre-built packages
+#
+_cust_pkgng_nopriv() {
+	local _pkgs _pkg _names _name
+
+	mkdir -p "${NANO_WORLDDIR}/${NANO_PKG_META_BASE}/pkg"
+
+	# Collect package files matching NANO_PACKAGE_LIST glob
+	_pkgs=$(cd "${NANO_PACKAGE_DIR}" && \
+	    find ${NANO_PACKAGE_LIST} \( -name '*.pkg' -o -name '*.txz' \) \
+	    2>/dev/null | sort -u)
+
+	if [ -z "${_pkgs}" ]; then
+		echo "DONE 0 packages"
+		return 0
+	fi
+
+	echo "=== TODO: $(echo "$_pkgs" | wc -l | tr -d ' ') packages ==="
+	echo "$_pkgs"
+	echo "==="
+
+	# pkg add requires root unconditionally, INSTALL_AS_USER is only
+    # honoured by pkg install, hence using pkg install
+	local _repodir="${NANO_OBJ}/_.ports-repo"
+	pprint 2 "cust_pkgng (nopriv): building local repo index in ${_repodir}"
+	rm -rf "${_repodir}"
+	mkdir -p "${_repodir}"
+	# Symlink packages into writable dir so pkg repo can write its index there
+	for _pkg in $_pkgs; do
+		ln -sf "${NANO_PACKAGE_DIR}/${_pkg}" "${_repodir}/${_pkg}"
+	done
+	pkg repo "${_repodir}"
+
+	cat > "$(nano_pkg_conf_dir)/ports-local.conf" <<EOF
+ports-local: {
+  url: "file://${_repodir}",
+  signature_type: "none",
+  enabled: yes
+}
+EOF
+
+	tgt_pkg update -r ports-local
+
+	# Resolve package names from the .pkg files
+	_names=""
+	for _pkg in $_pkgs; do
+		_name=$(pkg query -F "${_repodir}/${_pkg}" '%n' 2>/dev/null) \
+		    || continue
+		_names="${_names} ${_name}"
+	done
+
+	if [ -z "${_names}" ]; then
+		echo "DONE 0 packages (failed to resolve names)"
+		return 0
+	fi
+
+	tgt_pkg install -r ports-local -I -U ${_names}
+
+	tgt_pkg info
+
+	rm -rf "${NANO_WORLDDIR}/var/db/pkg/triggers"
 }
 
 #######################################################################

@@ -204,13 +204,14 @@ _xxx_add_sys_symlink() {
 #
 # pkg triggers should not need a chroot (lua script)
 # https://github.com/freebsd/pkg/issues/2673
-# Installing pkgbase as a user into a directory, these errors are thrown:
-# ldconfig: mkstemp(/var/run/ld-elf.so.hints.z0DWDA): Permission denied
-# pkg: Failed to create /triggers:Bad file descriptor
+#
+# Can skip (non-root) as _xxx_run_pkg_scripts() covers all trigger effects
+# manually (pwd_mkdb, cap_mkdb, services_mkdb, makewhatis), and rc.d/ldconfig
+# regenerates ld-elf.so.hints unconditionally at first boot
 #
 _xxx_tgt_pkg_triggers() {
 	if ! $do_root; then
-		tgt_pkg triggers
+		rm -rf "${NANO_WORLDDIR}/var/db/pkg/triggers"
 	else
 		tgt_pkg_chroot triggers
 	fi
