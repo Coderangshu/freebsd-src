@@ -943,17 +943,37 @@ tgt_rm() {
 }
 
 #
-# Switch the current root partition in the target file system tab.
+# Check whether a boot type is present in NANO_BOOT_TYPE
+# Input: $1 = boot type to check (case-insensitive)
+# Output: return 0 if found, 1 if not
+#
+nano_boot_type_is() {
+	local needle haystack
+	needle=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	haystack=$(printf '%s' "${NANO_BOOT_TYPE}" | tr '[:upper:]' '[:lower:]')
+	case " ${haystack} " in
+	*" ${needle} "*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+#
+# Switch the current root partition in the target file system tab
+# Also updates boot/loader.conf for BIOS GPT boot
 # Input: $1 = current root partition, $2 = new root partition
 #
 tgt_switch_root_fstab() {
-	local current new
+	local current new f
 	current="$1"
 	new="$2"
 
 	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
 		sed -i "" "s=${NANO_DRIVE}${current}=${NANO_DRIVE}${new}=g" "${f}"
 	done
+
+	if nano_boot_type_is BIOS && [ -f "${NANO_WORLDDIR}/boot/loader.conf" ]; then
+		sed -i "" "s=${NANO_DRIVE}${current}=${NANO_DRIVE}${new}=g" "${NANO_WORLDDIR}/boot/loader.conf"
+	fi
 }
 
 # Run in the world chroot, errors fatal

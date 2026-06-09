@@ -76,20 +76,6 @@ case ${NANO_ARCH} in
 esac
 . "${NANO_SRC}/tools/boot/install-boot.sh"
 
-# Check whether a boot type is present in NANO_BOOT_TYPE
-# Input: $1 = boot type to check
-# Output: return 0 if found, 1 if not
-#
-nano_boot_type_is() {
-	local needle haystack
-	needle=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-	haystack=$(printf '%s' "${NANO_BOOT_TYPE}" | tr '[:upper:]' '[:lower:]')
-	case " ${haystack} " in
-	*" ${needle} "*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
 # GPT override: write nanobsd.conf with NANO_DRIVE=gpt/NAME and fstab using GPT partition labels
 setup_nanobsd_write_confs() {
 	(
@@ -109,9 +95,16 @@ setup_nanobsd_write_confs() {
         fi
 	} | column -t -s $'\t' > etc/fstab
 	tgt_touch etc/fstab
+
+	# UEFI path sets vfs.root.mountfrom via loader.env inside the ESP
+	# BIOS path (gptboot → loader) has no equivalent, so set it in loader.conf
+	if nano_boot_type_is BIOS; then
+		printf 'vfs.root.mountfrom="ufs:/dev/%s%s"\n' \
+		    "${NANO_DRIVE}" "${NANO_SLICE_ROOT}" >> boot/loader.conf
+		tgt_touch boot/loader.conf
+	fi
 	)
 }
-
 
 #
 # Create a FAT EFI System Partition image file
@@ -262,9 +255,11 @@ calculate_partitioning() {
 	}' > ${NANO_LOG}/_.partitioning
 }
 
-# Return the line number in _.partitioning of the first code partition.
-# Lines 1..N are: optional BIOS marker, optional ESP(s), then code partitions.
-partitioning_code1_line() {
+#
+# Return the line number in _.partitioning of the first code partition
+# Lines 1..N are: optional BIOS marker, optional ESP(s), then code partitions
+#
+_partitioning_code1_line() {
 	local line=1
 	nano_boot_type_is BIOS && line=$(( line + 1 ))
 	if nano_boot_type_is UEFI; then
@@ -285,7 +280,7 @@ create_code_slice() {
 	(
 	local code1_line code_sects code_bytes makefs_sects
 
-	code1_line=$(partitioning_code1_line)
+	code1_line=$(_partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
 	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
@@ -313,7 +308,7 @@ _create_code_slice() {
 	(
 	local code1_line code_sects code_bytes makefs_sects
 
-	code1_line=$(partitioning_code1_line)
+	code1_line=$(_partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
 	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
@@ -343,7 +338,7 @@ create_diskimage() {
         code_bytes makefs_sects first_start_bytes cfg_line cfg_sects \
         swap_line swap_sects swap_bytes data_line data_sects
 
-	code1_line=$(partitioning_code1_line)
+	code1_line=$(_partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
 	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
@@ -476,7 +471,7 @@ _create_diskimage() {
         code_bytes makefs_sects first_start_bytes cfg_line cfg_sects \
         swap_line swap_sects swap_bytes data_line data_sects
 
-	code1_line=$(partitioning_code1_line)
+	code1_line=$(_partitioning_code1_line)
 
 	code_sects=$(awk "NR==${code1_line} {print \$2}" "${NANO_LOG}/_.partitioning")
 	code_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
