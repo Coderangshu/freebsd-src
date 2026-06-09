@@ -1274,6 +1274,10 @@ setup_nanobsd() {
 		nano_pkg_disable_repos
 	fi
 
+	if [ -n "$NANO_METALOG" ]; then
+		_xxx_pkg_add_var_db_files_to_metalog
+	fi
+
 	for d in var etc; do
 		# Link /$d under /conf
 		# we use hard links so we have them both places.

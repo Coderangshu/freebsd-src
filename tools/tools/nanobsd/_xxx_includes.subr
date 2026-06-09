@@ -214,6 +214,17 @@ _xxx_run_pkg_scripts() {
 	_xxx_add_sys_symlink
 }
 
+# Add /var/db/pkg to the METALOG
+_xxx_pkg_add_var_db_files_to_metalog() {
+	mtree -c -p ${NANO_WORLD}/var/db/pkg |
+	    mtree -C -K uname,gname -R nlink,size,time > "${NANO_METALOG}.pkgdb"
+	sed -i "" -e "s|^\./|./var/db/pkg/|g" \
+	    -e "s/flags=uarch,schg/flags=schg/g" \
+	    -e "s/ flags=uarch//g" "${NANO_METALOG}.pkgdb"
+	cat "${NANO_METALOG}.pkgdb" >> "$NANO_METALOG"
+	rm -f "${NANO_METALOG}.pkgdb"
+}
+
 #
 # If we do "make distribution", this directory must be present.
 # XXXJL Discuss adding this as a pkg script in base
