@@ -1311,7 +1311,7 @@ setup_nanobsd() {
 		sed -i "" "\=^\./tmp =d" "$NANO_METALOG"
 	fi
 	tgt_dir2symlink tmp var/tmp 1777
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+	if [ -z "$NANO_NOPKGBASE" ]; then
 		tgt_pkg_link_tmp_var_tmp
 	fi
 
