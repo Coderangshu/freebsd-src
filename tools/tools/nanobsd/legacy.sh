@@ -39,6 +39,34 @@ NANO_PLAN=legacy
 #
 METADATA_SECTS=16
 
+# Newfs parameters to use
+NANO_NEWFS="-b 4096 -f 512 -i 8192 -U"
+
+# makefs parameters to use
+NANO_MAKEFS="-o bsize=4096,density=8192,fsize=512,softupdates=1,version=2"
+
+# Set NANO_LABEL to non-blank to form the basis for using /dev/ufs/label
+# in preference to /dev/${NANO_DRIVE}
+# Root partition will be ${NANO_LABEL}s{1,2}
+# /cfg partition will be ${NANO_LABEL}s3
+# /data partition will be ${NANO_LABEL}s4
+NANO_LABEL=""
+NANO_SLICE_ROOT=s1
+NANO_SLICE_ALTROOT=s2
+NANO_SLICE_CFG=s3
+NANO_SLICE_DATA=s4
+NANO_PARTITION_ROOT=a
+NANO_PARTITION_ALTROOT=a
+NANO_ROOT=s1a
+NANO_ALTROOT=s2a
+
+# Override user's NANO_DRIVE if they specified a NANO_LABEL
+[ -n "${NANO_LABEL}" ] && NANO_DRIVE="ufs/${NANO_LABEL}" || true
+
+# boot0 flags/options and configuration
+NANO_BOOT0CFG="-o packet -s 1 -m 3"
+NANO_BOOTLOADER="boot/boot0sio"
+
 #######################################################################
 # Functions and variable definitions used by the legacy nanobsd
 # image building system
@@ -126,6 +154,8 @@ create_code_slice() {
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
 
 	(
+	local CODE_SIZE IMG MNT
+
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}
 	MNT=${NANO_OBJ}/_.mnt
 	mkdir -p ${MNT}
@@ -182,6 +212,8 @@ _create_code_slice() {
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
 
 	(
+	local CODE_SIZE IMG
+
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}
 	CODE_SIZE=$(awk '$3 == 1 {print $2}' "${NANO_LOG}/_.partitioning")
 
@@ -192,7 +224,7 @@ _create_code_slice() {
 	else
 		echo "Partition will not be bootable"
 	fi
-	nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
+	nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 	    "${NANO_METALOG}" "$(( CODE_SIZE - METADATA_SECTS ))" \
 	    "${NANO_OBJ}/_.disk.part" "${NANO_WORLDDIR}"
 	mkimg -s bsd -S 512 --capacity $(( CODE_SIZE * 512 )) \
@@ -279,8 +311,7 @@ is_defined create_diskimage || create_diskimage() {
 	# Create Data slice, if any
 	if [ -n "$NANO_SLICE_DATA" -a "$NANO_SLICE_CFG" = "$NANO_SLICE_DATA" -a \
 	   "$NANO_DATASIZE" -ne 0 ]; then
-		pprint 2 "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
-		exit 2
+		err "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
 	fi
 	if [ $NANO_DATASIZE -ne 0 -a -n "$NANO_SLICE_DATA" ]; then
 		populate_data_slice /dev/${MD}${NANO_SLICE_DATA} "${NANO_DATADIR}" ${MNT} "${NANO_SLICE_DATA}"
@@ -315,6 +346,7 @@ _create_diskimage() {
 	pprint 3 "log: ${NANO_OBJ}/_.di"
 
 	(
+	local CODE_SIZE CONF_SIZE DATA_SIZE
 	local altroot bootloader cfgimage dataimage diskimage
 
 	CODE_SIZE=$(awk '$3 == 1 {print $2}' "${NANO_LOG}/_.partitioning")
@@ -334,7 +366,7 @@ _create_diskimage() {
 		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
 			echo "Duplicating to second image..."
 			tgt_switch_root_fstab "${NANO_SLICE_ROOT}" "${NANO_SLICE_ALTROOT}"
-			nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
+			nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 			    "${NANO_METALOG}" "$(( CODE_SIZE - METADATA_SECTS ))" \
 			    "${NANO_OBJ}/_.altroot.part" "${NANO_WORLDDIR}"
 			tgt_switch_root_fstab "${NANO_SLICE_ALTROOT}" "${NANO_SLICE_ROOT}"
@@ -355,7 +387,7 @@ _create_diskimage() {
 	fi
 
 	# Create Config slice
-	_populate_cfg_part "${NANO_OBJ}/_.cfg.part" "${NANO_CFGDIR}" \
+	populate_cfg_part "${NANO_OBJ}/_.cfg.part" "${NANO_CFGDIR}" \
 	    "${NANO_SLICE_CFG}" "${CONF_SIZE}" "${NANO_METALOG_CFG}"
 	cfgimage="-p freebsd:=${NANO_OBJ}/_.cfg.part"
 
@@ -363,11 +395,10 @@ _create_diskimage() {
 	if [ -n "${NANO_SLICE_DATA}" ] &&
 	    [ "${NANO_SLICE_CFG}" = "${NANO_SLICE_DATA}" ] &&
 	    [ "${NANO_DATASIZE}" -ne 0 ]; then
-		pprint 2 "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
-		exit 2
+		err "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
 	fi
 	if [ "${NANO_DATASIZE}" -ne 0 ] && [ -n "${NANO_SLICE_DATA}" ]; then
-		_populate_data_part "${NANO_OBJ}/_.data.part" "${NANO_DATADIR}" \
+		populate_data_part "${NANO_OBJ}/_.data.part" "${NANO_DATADIR}" \
 		    "${NANO_SLICE_DATA}" "${DATA_SIZE}" "${NANO_METALOG_DATA}"
 		dataimage="-p freebsd:=${NANO_OBJ}/_.data.part"
 	fi
@@ -385,4 +416,30 @@ _create_diskimage() {
 	    "${NANO_OBJ}/_.cfg.part"\
 	    "${NANO_OBJ}/_.data.part"
 	) > ${NANO_LOG}/_.di 2>&1
+}
+
+# Create the /etc/fstab file
+tgt_write_fstab() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	# Save config file for scripts
+	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
+	tgt_touch etc/nanobsd.conf
+
+	printf_fstab "# Device" Mountpoint FStype Options Dump "Pass#"
+	printf_fstab "/dev/${NANO_DRIVE}${NANO_ROOT}" / ufs ro 1 1
+	printf_fstab "/dev/${NANO_DRIVE}${NANO_SLICE_CFG}" /cfg ufs rw,noauto 2 2
+	tgt_touch etc/fstab
+	)
+}
+
+# Pick up config files from the special partition
+tgt_etc_remount() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	echo "mount -o ro /dev/${NANO_DRIVE}${NANO_SLICE_CFG}" > conf/default/etc/remount
+	tgt_touch conf/default/etc/remount
+	)
 }

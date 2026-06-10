@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 [XXX]
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+
+set -e
+
+if [ ! -f /etc/nanobsd.conf ]; then
+	echo "/etc/nanobsd.conf missing." >&2
+	exit 1
+fi
+. /etc/nanobsd.conf
+
+if [ -z "$NANO_DRIVE" ] || [ -z "$NANO_ROOT" ] || [ -z "$NANO_ALTROOT" ]; then
+	echo "Configuration variables are missing." >&2
+	exit 1
+fi
+
+current_root=$(df -n / | tail -n1 | cut -d' ' -f1)
+case "$current_root" in
+"/dev/gpt/${NANO_ALTROOT}")
+	exec sh /root/bin/updatep1
+	;;
+"/dev/gpt/${NANO_ROOT}")
+	exec sh /root/bin/updatep2
+	;;
+*)
+	echo "Invalid root device '${current_root}'." >&2
+	exit 1
+	;;
+esac

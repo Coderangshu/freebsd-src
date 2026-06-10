@@ -90,7 +90,7 @@ metalog_add_data() {
 
 #
 # Build NANO_METALOG from pkgbase package manifests,
-# regenerate system databases (passwd, caps, services, mandoc),
+# regenerate system databases (passwd, caps, services),
 # and add missing entries
 #
 _xxx_pkg_metalog() {
@@ -141,7 +141,6 @@ _xxx_pkg_metalog() {
 
 	# Remove the directory entries for the symlinked paths
 	sed -i "" "\=^\./usr/local/etc = { / type=dir / d; }" "$NANO_METALOG"
-	sed -i "" "\=^\./tmp = { / type=dir / d; }" "$NANO_METALOG"
 
 	# These directories may end up being generated many times
 	# by pkg -o METALOG and the first one may not have the right permissions
@@ -167,6 +166,7 @@ _xxx_fix_pkg_permissions() {
 	chmod 0750 ${NANO_WORLDDIR}/root
 }
 
+#
 # Manually run triggers and package scripts
 # Ideally the scripts and triggers should have a @generate keyword that adds them
 # to the metalog
@@ -207,12 +207,6 @@ _xxx_run_pkg_scripts() {
 		metalog_add_data "./etc/ssl/cert.pem" "0444"
 		metalog_add_data "./conf/base/etc/ssl/cert.pem" "0444"
 	fi
-	# Repopulate mandoc dbs and add to metalog
-	for mandir in usr/share/man usr/share/openssl/man; do
-		[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
-		makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
-		metalog_add_data "./${mandir}/mandoc.db"
-	done
 
 	# Add /sys symlink, we do run make distribution in install_etc()
 	_xxx_add_sys_symlink
@@ -220,11 +214,13 @@ _xxx_run_pkg_scripts() {
 
 # Add /var/db/pkg to the METALOG
 _xxx_pkg_add_var_db_files_to_metalog() {
-	mtree -c -p ${NANO_WORLD}/var/db/pkg |
+	mtree -c -p ${NANO_WORLDDIR}/var/db/pkg |
 	    mtree -C -K uname,gname -R nlink,size,time > "${NANO_METALOG}.pkgdb"
-	sed -i "" -e "s|^\./|./var/db/pkg/|g" \
-	    -e "s/flags=uarch,schg/flags=schg/g" \
-	    -e "s/ flags=uarch//g" "${NANO_METALOG}.pkgdb"
+	sed -i "" -e "s|^\.|./var/db/pkg|g" \
+	    -e "s/ uname=[^ ]*/ uname=${NANO_DEF_UNAME}/g" \
+	    -e "s/ gname=[^ ]*/ gname=${NANO_DEF_GNAME}/g" \
+	    -e "s/ flags=uarch,schg$/ flags=schg/g" \
+	    -e "s/ flags=uarch$//g" "${NANO_METALOG}.pkgdb"
 	cat "${NANO_METALOG}.pkgdb" >> "$NANO_METALOG"
 	rm -f "${NANO_METALOG}.pkgdb"
 }
@@ -237,10 +233,10 @@ _xxx_add_sys_symlink() {
 	(
 	cd "${NANO_WORLDDIR}"
 	ln -sf usr/src/sys sys
+	)
 	if [ -n "$NANO_METALOG" ]; then
 		echo "./sys type=link uname=root gname=wheel mode=0755 link=usr/src/sys" >> "$NANO_METALOG"
 	fi
-	)
 }
 
 #
@@ -252,7 +248,13 @@ _xxx_add_sys_symlink() {
 #
 _xxx_tgt_pkg_triggers() {
 	if ! $do_root; then
-		tgt_pkg triggers
+		# Repopulate mandoc dbs and add to metalog
+		for mandir in usr/share/man usr/share/openssl/man; do
+			[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
+			makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
+			metalog_add_data "./${mandir}/mandoc.db"
+		done
+		rm -f "${NANO_WORLDDIR}/var/db/triggers/*"
 	else
 		tgt_pkg_chroot triggers
 	fi

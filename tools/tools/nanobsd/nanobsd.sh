@@ -33,6 +33,11 @@ legacy() {
     . "${topdir}/legacy.sh"
 }
 
+gpt() {
+    # Pull in gpt stuff on demand
+    . "${topdir}/gpt.sh"
+}
+
 is_defined() {
 	case $(type $1 2>/dev/null) in
 	*function) return 0 ;;
