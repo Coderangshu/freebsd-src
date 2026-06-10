@@ -171,31 +171,6 @@ WITHOUT_INSTALLLIB=true
 
 NANO_PACKAGE_ONLY=1
 
-# makefs(8)-size compatible
-# See NetBSD's strsuftoll(3)
-strsuftoll() {
-	local num result unit
-
-	num=${1%?}
-	unit=${1#"${num}"}
-
-	case "$unit" in
-	[bB]) result="${num}x512" ;;
-	[kK]) result="${num}x1024" ;;
-	[mM]) result="${num}x1024x1024" ;;
-	[gG]) result="${num}x1024x1024x1024" ;;
-	[tT]) result="${num}x1024x1024x1024x1024" ;;
-	[wW]) result="${num}x4" ;; # sizeof(int)
-	[0-9]) result="$1" ;;
-	*)
-		printf "%s\n" "'$1': illegal number"
-		exit 1
-		;;
-	esac
-
-	printf "%s" "$(echo "scale=0; $result" | tr 'x' '*' | bc)"
-}
-
 # Creates images for all the formats that use MBR / GPT
 # split later if the #ifdef soup gets too bad.
 create_diskimage_gpt() {

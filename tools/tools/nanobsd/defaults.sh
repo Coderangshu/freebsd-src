@@ -105,12 +105,17 @@ NANO_CUSTOMIZE=""
 # Late customize commands
 NANO_LATE_CUSTOMIZE=""
 
-# Newfs parameters to use
-NANO_NEWFS="-b 4096 -f 512 -i 8192 -U"
-NANO_MAKEFS="-o bsize=4096,density=8192,fsize=512,softupdates=1,version=2"
+# makefs parameters to use
+NANO_MAKEFS="-o softupdates=1,version=2"
 
 # The drive name of the media at runtime
 NANO_DRIVE=ada0
+
+#
+# Sector size in bytes.
+# Accepts suffixes and products (4k, 1M, 4x1024)
+#
+NANO_SECTOR_SIZE=512
 
 # Target media size in 512 bytes sectors
 NANO_MEDIASIZE=4000000
@@ -118,12 +123,16 @@ NANO_MEDIASIZE=4000000
 # Number of code images on media (1 or 2)
 NANO_IMAGES=2
 
+#
 # 0 -> Leave second image all zeroes so it compresses better.
 # 1 -> Initialize second image with a copy of the first
+#
 NANO_INIT_IMG2=1
 
+#
 # Size of code file system in 512 bytes sectors.
 # If zero, size will be as large as possible
+#
 NANO_CODESIZE=0
 
 # Size of configuration file system in 512 bytes sectors.
@@ -141,9 +150,11 @@ NANO_RAM_ETCSIZE=10240
 # Size of the /tmp+/var ramdisk in 512 bytes sectors
 NANO_RAM_TMPVARSIZE=10240
 
-# boot0 flags/options and configuration
-NANO_BOOT0CFG="-o packet -s 1 -m 3"
-NANO_BOOTLOADER="boot/boot0sio"
+# Size of swap partition in 512 bytes sectors
+NANO_SWAP_SIZE=0
+
+# Swap partition encryption
+NANO_SWAP_ENCRYPTION=
 
 # boot2 flags/options
 # default force serial console
@@ -158,21 +169,6 @@ NANO_IMAGE_MBRONLY=true
 
 # Progress Print level
 PPLEVEL=3
-
-# Set NANO_LABEL to non-blank to form the basis for using /dev/ufs/label
-# in preference to /dev/${NANO_DRIVE}
-# Root partition will be ${NANO_LABEL}s{1,2}
-# /cfg partition will be ${NANO_LABEL}s3
-# /data partition will be ${NANO_LABEL}s4
-NANO_LABEL=""
-NANO_SLICE_ROOT=s1
-NANO_SLICE_ALTROOT=s2
-NANO_SLICE_CFG=s3
-NANO_SLICE_DATA=s4
-NANO_PARTITION_ROOT=a
-NANO_PARTITION_ALTROOT=a
-NANO_ROOT=s1a
-NANO_ALTROOT=s2a
 
 # Default ownership for nopriv build
 NANO_DEF_UNAME=root
@@ -524,43 +520,48 @@ tgt_pkg_update_config_files_content() {
 }
 
 #
-# Update the path the files table of the target pkg database from
-# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
+# Swap the dir ID with the symlink ID in the pkg_directories table.
+# Remove the dir ID from the directories table
 #
-tgt_pkg_update_file_path_etc_local() {
-	tgt_pkg shell <<-EOF
-		UPDATE files
-		SET path = '/etc/local' || SUBSTR(path, 15)
-		WHERE path LIKE '/usr/local/etc%';
-	EOF
-}
+tgt_pkg_rm_dir2symlink() {
+	local dir dir_id realpath_target symlink symlink_id update_stmt
 
-#
-# Swap the /tmp ID with the /var/tmp ID in the pkg_directories table.
-# Remove the /tmp directory from the directories table.
-#
-tgt_pkg_link_tmp_var_tmp() {
-	local tmp_id var_tmp_id
+	dir="$1"
+	symlink="$2"
 
-	tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/tmp';")
-	var_tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/var/tmp';")
+	# Resolve the symlink's target destination to query the database
+	realpath_target=$(realpath -q "${NANO_WORLDDIR}/${dir}/../${symlink}")
+	realpath_target="${realpath_target#$NANO_WORLDDIR}"
 
-	if [ -z "$tmp_id" ] || [ -z "$var_tmp_id" ]; then
-		return
+	if [ -n "$realpath_target" ]; then
+		symlink_id=$(tgt_pkg shell "SELECT id FROM directories
+		    WHERE path = '${realpath_target}';")
+	fi
+	dir_id=$(tgt_pkg shell "SELECT id FROM directories
+	    WHERE path = '/${dir}';")
+	if [ -z "$dir_id" ]; then
+		return 0
+	fi
+
+	# Change any package relation from the dir ID to the symlink ID (if any)
+	if [ -n "$symlink_id" ]; then
+		update_stmt="UPDATE OR IGNORE pkg_directories
+		    SET directory_id = ${symlink_id}
+		    WHERE directory_id = ${dir_id};"
+	else
+		update_stmt="-- Skip UPDATE: symlink_id is empty"
 	fi
 
 	tgt_pkg shell <<-EOF
 		BEGIN TRANSACTION;
 
-		-- Change any package relation from the /tmp ID to the /var/tmp ID
-		UPDATE OR IGNORE pkg_directories
-		SET directory_id = ${var_tmp_id} WHERE directory_id = ${tmp_id};
+		${update_stmt}
 
-		-- Remove residual /tmp remnants left behind by "OR IGNORE"
-		DELETE FROM pkg_directories WHERE directory_id = ${tmp_id};
+		-- Remove residual dir ID remnants left behind by "OR IGNORE"
+		DELETE FROM pkg_directories WHERE directory_id = ${dir_id};
 
-		-- Remove /tmp from the directories table
-		DELETE FROM directories WHERE id = ${tmp_id};
+		-- Remove dir ID from the directories table
+		DELETE FROM directories WHERE id = ${dir_id};
 
 		COMMIT;
 	EOF
@@ -569,7 +570,7 @@ tgt_pkg_link_tmp_var_tmp() {
 # Timestamp all files with NANO_TIMESTAMP in the pkg database
 tgt_pkg_time_timestamp() {
 	if [ -z "$NANO_TIMESTAMP" ]; then
-		return
+		return 0
 	fi
 
 	tgt_pkg shell "UPDATE files SET mtime = ${NANO_TIMESTAMP};"
@@ -584,6 +585,7 @@ pkg_cmd() {
 	    -o IGNORE_OSVERSION=yes \
 	    -o OSVERSION="$NANO_OSVERSION" \
 	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" \
+	    -o PKG_DBDIR="${NANO_WORLDDIR}/var/db/pkg" \
 	    "$@"
 }
 
@@ -650,7 +652,7 @@ EOF
 # XXXJL FINGERPRINTS!
 	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
 FreeBSD-local: {
-  url: "file:///$(nano_pkg_cachedir)",
+  url: "file://$(nano_pkg_cachedir)",
   enabled: no
 }
 EOF
@@ -802,7 +804,8 @@ tgt_touch() (
 # The directory is removed and a symlink is created.  If we're doing
 # a nopriv build, then append this fact to the metalog
 #
-tgt_dir2symlink() (
+tgt_dir2symlink() {
+	(
 	local dir=$1
 	local symlink=$2
 	local mode=${3:-0777}
@@ -810,29 +813,29 @@ tgt_dir2symlink() (
 	cd "${NANO_WORLDDIR}"
 
 	rm -xrf "$dir"
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg shell <<-EOF
-			DELETE FROM directories WHERE path = '$dir';
-		EOF
+	if [ -n "$NANO_METALOG" ]; then
+		sed -i "" "\=^\./${dir} =d" "$NANO_METALOG"
+	fi
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_rm_dir2symlink "$dir" "$symlink" || true
 	fi
 
 	ln -sf "$symlink" "$dir"
 	chmod "$mode" "$dir"
-	if $do_root; then
-		chmod -h "$mode" "$dir"
-	fi
 	if [ -n "$NANO_METALOG" ]; then
 		printf "./%s type=link uname=%s gname=%s mode=%s link=%s\n" \
 		    "$dir" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" \
 		    "$symlink" >> "$NANO_METALOG"
 	fi
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg shell <<-EOF
-			INSERT INTO files (path, uname, gname, perm, fflags, symlink_target)
-			VALUES ('$dir', '$NANO_DEF_UNAME', '$NANO_DEF_GNAME', '$mode', 0, '$symlink');
-		EOF
-	fi
-)
+	# XXXJL this is not really needed
+	# if [ -z "$NANO_NOPKGBASE" ]; then
+	# 	tgt_pkg shell <<-EOF
+	# 		INSERT INTO files (path, uname, gname, perm, fflags, symlink_target)
+	# 		VALUES ('$dir', '$NANO_DEF_UNAME', '$NANO_DEF_GNAME', '$mode', 0, '$symlink');
+	# 	EOF
+	# fi
+	)
+}
 
 #
 # Generate metalog entries for each intermediate directory in a path.
@@ -888,8 +891,7 @@ tgt_rm() {
 # Switch the current root partition in the target file system tab.
 # Input: $1 = current root partition, $2 = new root partition
 #
-tgt_switch_root_fstab()
-{
+tgt_switch_root_fstab() {
 	local current new
 	current="$1"
 	new="$2"
@@ -1257,8 +1259,13 @@ setup_nanobsd() {
 			sed -i "" "\=^\./usr/local/etc =d" "$NANO_METALOG"
 			sed -i "" -e "s=^\./usr/local/etc/=./etc/local/=g" "$NANO_METALOG"
 		fi
-		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-			tgt_pkg_update_file_path_etc_local
+		if [ -z "$NANO_NOPKGBASE" ]; then
+			tgt_pkg shell "UPDATE directories
+			    SET path = '/etc/local'
+			    WHERE path = '/usr/local/etc';"
+			tgt_pkg shell "UPDATE files
+			    SET path = '/etc/local' || SUBSTR(path, 15)
+			    WHERE path LIKE '/usr/local/etc%';"
 		fi
 	fi
 
@@ -1273,6 +1280,9 @@ setup_nanobsd() {
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		nano_pkg_disable_repos
 	fi
+
+	# Put /tmp on the /var ramdisk
+	tgt_dir2symlink tmp var/tmp 1777
 
 	if [ -n "$NANO_METALOG" ]; then
 		_xxx_pkg_add_var_db_files_to_metalog
@@ -1306,19 +1316,11 @@ setup_nanobsd() {
 	tgt_touch conf/base/etc/md_size
 	tgt_touch conf/base/var/md_size
 
-	# Pick up config files from the special partition
-	echo "mount -o ro /dev/${NANO_DRIVE}${NANO_SLICE_CFG}" > conf/default/etc/remount
-	tgt_touch conf/default/etc/remount
+	# Add the /conf/default/etc/remount file
+	tgt_etc_remount
 
-	# Put /tmp on the /var ramdisk (it may already be symlinked)
-	if [ -n "$NANO_METALOG" ]; then
-		sed -i "" "\=^\./tmp =d" "$NANO_METALOG"
-	fi
-	tgt_dir2symlink tmp var/tmp 1777
-	if [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg_link_tmp_var_tmp
-	fi
-
+	# Make sure that firstboot scripts run so growfs works
+	tgt_touch firstboot
 	) > ${NANO_LOG}/_.dl 2>&1
 }
 
@@ -1366,6 +1368,8 @@ entropy_file="NO"	# Disable late (used when going multi-user)
 			# entropy through reboots.
 entropy_dir="NO"	# Disable caching entropy via cron.
 dumpdev="NO"		# Disable dumpdev.
+growfs_enable="YES"	# Attempt to grow the root filesystem on boot.
+growfs_swap_size="${NANO_SWAP_SIZE}"	# Size in bytes to specify swap size.
 
 ##############################################################
 .
@@ -1381,18 +1385,59 @@ EOF
 		tgt_pkg_update_config_files_content etc/defaults/rc.conf
 	fi
 
-	# Save config file for scripts
-	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
-	tgt_touch etc/nanobsd.conf
-
-	echo "/dev/${NANO_DRIVE}${NANO_ROOT} / ufs ro 1 1" > etc/fstab
-	echo "/dev/${NANO_DRIVE}${NANO_SLICE_CFG} /cfg ufs rw,noauto 2 2" >> etc/fstab
-	tgt_touch etc/fstab
+	tgt_write_fstab
 	tgt_dir cfg
 
 	# Create directory for eventual /usr/local/etc contents
 	tgt_dir etc/local
 	)
+}
+
+# Write to the /etc/fstab file
+printf_fstab() {
+	printf "%s\t\t%s\t%s\t%s\t\t%s\t%s\n" \
+	    "$1" "$2" "$3" "$4" "$5" "$6" >> ${NANO_WORLDDIR}/etc/fstab
+}
+
+get_uefi_bootname() {
+	case "$NANO_ARCH" in
+	amd64)   echo BOOTX64 ;;
+	aarch64) echo BOOTAA64 ;;
+	i386)    echo BOOTIA32 ;;
+	armv7)   echo BOOTARM ;;
+	riscv64) echo BOOTRISCV64 ;;
+	*)       err "Unsupported NANO_ARCH '${NANO_ARCH}'" ;;
+	esac
+}
+
+get_bootcode() {
+	local boot_type part_type
+	boot_type="$1"
+	part_type="$2"
+
+	case "$boot_type" in
+	[Bb][Ii][Oo][Ss])
+		case "$part_type" in
+		[Mm][Bb][Rr]) echo "boot/boot" ;;
+		[Gg][Pp][Tt]) echo "boot/gptboot" ;;
+		*) err "Unsupported BIOS partition type '${part_type}'" ;;
+		esac
+		;;
+	[Uu][Ee][Ff][Ii])
+		# XXXJL we want /boot/loader.efi for Primary/Secondary ESP partitions.
+		# These are supposed to be switched with efibootmgr -n.
+		# For the Recovery ESP with UFS, we want /boot/gptboot.efi,
+		# this allows us to switch using gpart set -a bootonce.
+		# For the Recovery ESP with ZFS, we want /boot/loader.efi,
+		# coupled with a bare-minimum zpool-features(7)?
+		case "$part_type" in
+		[Gg][Pp][Tt]) echo "boot/loader.efi" ;;
+		[Zz][Ff][Ss]) echo "boot/loader.efi" ;;
+		*) err "Unsupported UEFI partition type '${part_type}'" ;;
+		esac
+		;;
+	*) err "Unsupported boot type '${boot_type}'" ;;
+	esac
 }
 
 # Remove all empty directories under NANO_WORLDDIR/usr
@@ -1436,8 +1481,13 @@ nano_makefs() {
 	image=$4
 	dir=$5
 
-	makefs -t ffs ${options} -F "${metalog}" -N "${NANO_WORLDDIR}/etc" \
-	    -R "${size}b" -T "${NANO_TIMESTAMP}" "${image}" "${dir}"
+	if [ -n "$metalog" ] && [ -f "$metalog" ]; then
+		makefs -t ffs -DxZ ${options} -F "$metalog" -N "${NANO_WORLDDIR}/etc" \
+		    -R "${size}b" -T "$NANO_TIMESTAMP" "$image" "$dir"
+	else
+		makefs -t ffs -Z ${options} -N "${NANO_WORLDDIR}/etc" \
+		    -R "${size}b" -T "$NANO_TIMESTAMP" "$image" "$dir"
+	fi
 }
 
 #
@@ -1476,7 +1526,7 @@ populate_slice() {
 # Input: $1 = type (cfg/data), $2 = output image path, $3 = source dir,
 # $4 = label, $5 = size in sectors, $6 = metalog
 #
-_populate_part() {
+populate_part() {
 	local dir fs lbl metalog size type
 	type=$1
 	fs=$2
@@ -1515,7 +1565,7 @@ _populate_part() {
 			)
 		fi
 
-		nano_makefs "-DxZ ${NANO_MAKEFS}" "${metalog}" "${size}" "${fs}" "${dir}"
+		nano_makefs "${NANO_MAKEFS}" "${metalog}" "${size}" "${fs}" "${dir}"
 	fi
 }
 
@@ -1528,13 +1578,13 @@ populate_cfg_slice() {
 }
 
 #
-# Thin wrapper around _populate_part for creating
+# Thin wrapper around populate_part for creating
 # the configuration partition image file
-# Input: $1 = image path, $2 = source dir, $3 = label, $4 = size in sectors,
-# $5 = metalog
+# Input: $1 = image path, $2 = source dir, $3 = slice number,
+# $4 = size in sectors, $5 = metalog
 #
-_populate_cfg_part() {
-	_populate_part "cfg" "$1" "$2" "$3" "$4" "$5"
+populate_cfg_part() {
+	populate_part "cfg" "$1" "$2" "$3" "$4" "$5"
 }
 
 #
@@ -1546,11 +1596,11 @@ populate_data_slice() {
 }
 
 #
-# Thin wrapper around _populate_part for creating the data partition image file
+# Thin wrapper around populate_part for creating the data partition image file
 # Input: $1 = image path, $2 = source dir, $3 = label, $4 = size, $5 = metalog
 #
-_populate_data_part() {
-	_populate_part "data" "$1" "$2" "$3" "$4" "$5"
+populate_data_part() {
+	populate_part "data" "$1" "$2" "$3" "$4" "$5"
 }
 
 #
@@ -1575,6 +1625,36 @@ last_orders() {
 err() {
 	echo "$@" >&2
 	exit 2
+}
+
+#
+# Convert a human-readable size string with a suffix (b/k/m/g/t/w) into bytes.
+# Also accepts "x"-delimited products followed by a suffix (e.g., "2x1024k")
+# makefs(8)-size compatible.  See NetBSD's strsuftoll(3)
+# Input: $1 = size string (e.g., "512m", "2x1024x1024k")
+# Output: byte count
+#
+strsuftoll() {
+	local num result unit
+
+	num=${1%?}
+	unit=${1#"${num}"}
+
+	case "$unit" in
+	[bB]) result="${num}x${NANO_SECTOR_SIZE}" ;;
+	[kK]) result="${num}x1024" ;;
+	[mM]) result="${num}x1024x1024" ;;
+	[gG]) result="${num}x1024x1024x1024" ;;
+	[tT]) result="${num}x1024x1024x1024x1024" ;;
+	[wW]) result="${num}x4" ;; # sizeof(int)
+	[0-9]) result="$1" ;;
+	*)
+		printf "%s\n" "'$1': illegal number"
+		exit 1
+		;;
+	esac
+
+	printf "%s" "$(echo "scale=0; $result" | tr 'x' '*' | bc)"
 }
 
 #######################################################################
@@ -1678,7 +1758,8 @@ cust_allow_ssh_root() {
 # Install the stuff under ./Files
 
 # Copy all files from NANO_TOOLS/Files into NANO_WORLDDIR
-cust_install_files() (
+cust_install_files() {
+	(
 	cd "${NANO_TOOLS}/Files"
 	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
 	    cpio ${CPIO_SYMLINK} -Ldumpv ${NANO_WORLDDIR}
@@ -1688,7 +1769,8 @@ cust_install_files() (
 	fi
 
 	tgt_touch $(find * -type f)
-)
+	)
+}
 
 #######################################################################
 # Install packages from ${NANO_PACKAGE_DIR}
@@ -1698,6 +1780,11 @@ cust_install_files() (
 # into NANO_WORLDDIR via a nullfs-mounted chroot
 #
 cust_pkgng() {
+	if ! $do_root && [ -n "$NANO_NOPRIV_BUILD" ]; then
+		pprint 2 'Skipping "cust_pkgng" (unprivileged builds not supported yet)'
+		return 0
+	fi
+
 	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
 	local PKG_CONF="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
 	local PKGCMD="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"
@@ -1812,11 +1899,11 @@ late_customize_cmd() {
 # Input: $1 = level, $2 = message
 #
 pprint() {
-    if [ "$1" -le $PPLEVEL ]; then
+	if [ "$1" -le $PPLEVEL ]; then
 		runtime=$(( $(date +%s) - NANO_STARTTIME ))
 		printf "%s %.${1}s %s\n" \
 		    "$(date -u -r $runtime +%H:%M:%S)" "#####" "$2" 1>&3
-    fi
+	fi
 }
 
 # Print the nanobsd.sh command-line option summary to stderr, exit with code 2
@@ -1878,9 +1965,6 @@ set_defaults_and_export() {
 	NANO_MAKE_CONF_BUILD=${MAKEOBJDIRPREFIX}/make.conf.build
 	NANO_MAKE_CONF_INSTALL=${NANO_OBJ}/make.conf.install
 
-	# Override user's NANO_DRIVE if they specified a NANO_LABEL
-	[ -n "${NANO_LABEL}" ] && NANO_DRIVE="ufs/${NANO_LABEL}" || true
-
 	# Set a default NANO_TOOLS to NANO_SRC/NANO_TOOLS if it exists
 	[ ! -d "${NANO_TOOLS}" ] && [ -d "${NANO_SRC}/${NANO_TOOLS}" ] && \
 		NANO_TOOLS="${NANO_SRC}/${NANO_TOOLS}" || true
@@ -1898,6 +1982,7 @@ set_defaults_and_export() {
 	export_var NANO_CONFSIZE
 	export_var NANO_CUSTOMIZE
 	export_var NANO_DATASIZE
+	export_var NANO_DISKIMGDIR
 	export_var NANO_DRIVE
 	export_var NANO_HEADS
 	export_var NANO_IMAGES
@@ -1915,6 +2000,8 @@ set_defaults_and_export() {
 	export_var NANO_PMAKE
 	export_var NANO_SECTS
 	export_var NANO_SRC
+	export_var NANO_SWAP_ENCRYPTION
+	export_var NANO_SWAP_SIZE
 	export_var NANO_TIMESTAMP
 	export_var NANO_TOOLS
 	export_var NANO_WORLDDIR
