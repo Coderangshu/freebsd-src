@@ -175,17 +175,21 @@ _xxx_run_pkg_scripts() {
 	# Repopulate the passwd db
 	if [ -f "${NANO_WORLDDIR}/etc/master.passwd" ]; then
 		pwd_mkdb -d "${NANO_WORLDDIR}/etc" \
-		    "${NANO_WORLDDIR}/etc/master.passwd" 2>/dev/null || true
+		    "${NANO_WORLDDIR}/etc/master.passwd"
 		# Add the passwd db files to the metalog
 		metalog_add_data "./etc/login.conf.db"
+		metalog_add_data "./conf/base/etc/login.conf.db"
 		metalog_add_data "./etc/passwd"
+		metalog_add_data "./conf/base/etc/passwd"
 		metalog_add_data "./etc/pwd.db"
+		metalog_add_data "./conf/base/etc/pwd.db"
 		metalog_add_data "./etc/spwd.db" "0600"
-		metalog_add_data "./var/db/services.db"
+		metalog_add_data "./conf/base/etc/spwd.db" "0600"
 	fi
 	# Repopulate the capabilities db
 	if [ -f "${NANO_WORLDDIR}/etc/login.conf" ]; then
-		cap_mkdb "${NANO_WORLDDIR}/etc/login.conf" 2>/dev/null || true
+		cap_mkdb -f "${NANO_WORLDDIR}/etc/login.conf.db" \
+		    "${NANO_WORLDDIR}/etc/login.conf"
 		# Add the capabilities db to the metalog
 		metalog_add_data "./etc/login.conf.db"
 		metalog_add_data "./conf/base/etc/login.conf.db"
@@ -193,12 +197,12 @@ _xxx_run_pkg_scripts() {
 	# Repopulate the services db
 	if [ -f "${NANO_WORLDDIR}/etc/services" ]; then
 		services_mkdb -q -o "${NANO_WORLDDIR}/var/db/services.db" \
-		    "${NANO_WORLDDIR}/" 2>/dev/null || true
+		    "${NANO_WORLDDIR}/etc/services"
 		# Add the services db to the metalog
 		metalog_add_data "./var/db/services.db"
 		metalog_add_data "./conf/base/var/db/services.db"
 	fi
-	# XXXJL certctl
+	# XXXJL certctl rehash
 	if [ -f "${NANO_WORLDDIR}/etc/ssl/cert.pem" ]; then
 		metalog_add_data "./etc/ssl/cert.pem" "0444"
 		metalog_add_data "./conf/base/etc/ssl/cert.pem" "0444"
