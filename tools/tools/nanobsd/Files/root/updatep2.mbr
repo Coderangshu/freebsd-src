@@ -25,29 +25,37 @@
 # SUCH DAMAGE.
 #
 #
-# Script to update partition 1 on a NanoBSD system.
+# Script to update partition 2 on a NanoBSD MBR system.
 #
 # usage:
-#	ssh somewhere cat image.s1 | sh updatep1
+#	ssh somewhere cat image.s1 | sh updatep2
 #
 
 set -e
 
 . /etc/nanobsd.conf
 
-if mount | grep ${NANO_DRIVE}s1 > /dev/null ; then
-	echo "You are running partition 1 already"
-	echo "you probably want to use 'updatep2' instead"
+if mount | grep ${NANO_DRIVE}s2 > /dev/null ; then
+	echo "You are running partition 2 already"
+	echo "you probably want to use 'updatep1' instead"
 	exit 1
 fi
 
 # Blow away old system.
-dd if=/dev/zero of=/dev/${NANO_DRIVE}s1 bs=1m count=1 > /dev/null 2>&1
+dd if=/dev/zero of=/dev/${NANO_DRIVE}s2 bs=1m count=1 > /dev/null 2>&1
 
 # Copy in new system
-dd of=/dev/${NANO_DRIVE}s1 obs=64k
+dd of=/dev/${NANO_DRIVE}s2 obs=64k
 
 # Check that it worked
-fsck_ffs -n /dev/${NANO_DRIVE}s1a
+fsck_ffs -n /dev/${NANO_DRIVE}s2a
 
-gpart set -a active -i 1 ${NANO_DRIVE}
+# Update the /etc/fstab
+trap "umount /mnt" 1 2 15 EXIT
+mount /dev/${NANO_DRIVE}s2a /mnt
+sed -i "" "s/${NANO_DRIVE}s1/${NANO_DRIVE}s2/" /mnt/conf/base/etc/fstab
+sed -i "" "s/${NANO_DRIVE}s1/${NANO_DRIVE}s2/" /mnt/etc/fstab
+umount /mnt
+trap 1 2 15 EXIT
+gpart set -a active -i 2 ${NANO_DRIVE}
+boot0cfg -s 2 ${NANO_DRIVE}

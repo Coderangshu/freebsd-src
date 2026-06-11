@@ -137,6 +137,9 @@ NANO_UFS_SECTOR_SIZE=512
 # Number of code images on media (1 or 2)
 NANO_IMAGES=2
 
+# When 1, add a third (backup) partition/slice as permanent fallback root
+NANO_BACKUP_PART=1
+
 # 0 -> Leave second image all zeroes so it compresses better
 # 1 -> Initialize second image with a copy of the first
 NANO_INIT_IMG2=1

@@ -48,7 +48,8 @@ METADATA_SECTS=16
 calculate_partitioning() {
 	echo $NANO_MEDIASIZE $NANO_IMAGES \
 		$NANO_SECTS $NANO_HEADS \
-		$NANO_CODESIZE $NANO_CONFSIZE $NANO_DATASIZE |
+		$NANO_CODESIZE $NANO_CONFSIZE $NANO_DATASIZE \
+		${NANO_BACKUP_PART:-0} |
 	awk '
 	{
 		# size of cylinder in sectors
@@ -68,32 +69,45 @@ calculate_partitioning() {
 		csl = int (($6 + cs - 1) / cs)
 
 		# size of image partition(s) in full cylinders
+		# $8 = backup_part flag: account for extra code slice in sizing
 		if ($5 == 0) {
-			isl = int ((cyl - dsl - csl) / $2)
+			isl = int ((cyl - dsl - csl) / ($2 + ($8 > 0 ? 1 : 0)))
 		} else {
 			isl = int (($5 + cs - 1) / cs)
 		}
 
+		i = 1
+
 		# First image partition start at second track
-		print $3, isl * cs - $3, 1
-		c = isl * cs;
+		print $3, isl * cs - $3, i;
+        c = isl * cs;
+        i++
 
 		# Second image partition (if any) also starts offset one
 		# track to keep them identical
 		if ($2 > 1) {
-			print $3 + c, isl * cs - $3, 2
-			c += isl * cs;
+			print $3 + c, isl * cs - $3, i;
+            c += isl * cs;
+            i++
+		}
+
+		# Backup partition — permanent golden image, before cfg
+		if ($8 > 0) {
+			print $3 + c, isl * cs - $3, i;
+            c += isl * cs;
+            i++
 		}
 
 		# Config partition starts at cylinder boundary
-		print c, csl * cs, 3
-		c += csl * cs
+		print c, csl * cs, i;
+        c += csl * cs;
+        i++
 
 		# Data partition (if any) starts at cylinder boundary
 		if ($7 > 0) {
-			print c, dsl * cs, 4
+			print c, dsl * cs, i
 		} else if ($7 < 0 && $1 > c) {
-			print c, $1 - c, 4
+			print c, $1 - c, i
 		} else if ($1 < c) {
 			print "Disk space overcommitted by", \
 			    c - $1, "sectors" > "/dev/stderr"
@@ -237,6 +251,7 @@ create_diskimage() {
 	gpart show ${MD}
 	if [ -f ${NANO_WORLDDIR}/${NANO_BOOTLOADER} ]; then
 		gpart bootcode -b ${NANO_WORLDDIR}/${NANO_BOOTLOADER} ${NANO_BOOTFLAGS} ${MD}
+		boot0cfg ${NANO_BOOT0CFG} /dev/${MD}
 	fi
 
 	echo "Writing code image..."
@@ -257,6 +272,12 @@ create_diskimage() {
 		if [ -n "${NANO_LABEL}" ]; then
 			tunefs -L ${NANO_LABEL}"${NANO_ALTROOT}" /dev/${MD}${NANO_ALTROOT}
 		fi
+	fi
+
+	# Backup slice (s3) — permanent cold standby, copy of root A
+	if [ "${NANO_BACKUP_PART:-0}" -gt 0 ]; then
+		echo "Copying backup image to s3..."
+		dd conv=sparse if=/dev/${MD}${NANO_SLICE_ROOT} of=/dev/${MD}s3 bs=64k
 	fi
 
 	# Create Config slice
@@ -372,3 +393,23 @@ _create_diskimage() {
 	    "${NANO_OBJ}/_.data.part"
 	) > ${NANO_LOG}/_.di 2>&1
 }
+
+# MBR override: cust_install_files installs MBR-aware update scripts.
+# User still calls cust_install_files explicitly in NANO_CUSTOMIZE.
+cust_install_files() (
+	cd "${NANO_TOOLS}/Files"
+	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/|/updatep[12]\.(gpt|mbr)$' |
+	    cpio ${CPIO_SYMLINK} -Ldumpv ${NANO_WORLDDIR}
+
+	if [ -n "${NANO_CUST_FILES_MTREE}" -a -f ${NANO_CUST_FILES_MTREE} ]; then
+		CR "mtree -eiU -p /" <${NANO_CUST_FILES_MTREE}
+	fi
+
+	tgt_touch $(find * -type f | grep -Ev '^root/updatep[12]\.(gpt|mbr)$')
+
+	install -m 755 "${NANO_TOOLS}/Files/root/updatep1.mbr" \
+	    "${NANO_WORLDDIR}/root/updatep1"
+	install -m 755 "${NANO_TOOLS}/Files/root/updatep2.mbr" \
+	    "${NANO_WORLDDIR}/root/updatep2"
+	tgt_touch root/updatep1 root/updatep2
+)
