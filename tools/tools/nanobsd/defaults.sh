@@ -1365,6 +1365,7 @@ entropy_boot_file="NO"	# Disable very early (used at early boot time)
 entropy_file="NO"	# Disable late (used when going multi-user)
 			# entropy through reboots.
 entropy_dir="NO"	# Disable caching entropy via cron.
+dumpdev="NO"		# Disable dumpdev.
 
 ##############################################################
 .
