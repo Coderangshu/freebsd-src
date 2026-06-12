@@ -51,4 +51,6 @@ dd of=/dev/${NANO_DRIVE}s1 obs=64k
 fsck_ffs -n /dev/${NANO_DRIVE}s1a
 
 gpart set -a active -i 1 ${NANO_DRIVE}
-boot0cfg -s 1 ${NANO_DRIVE}
+# Try-once: set default slice but do not persist interactive selections.
+# /etc/rc.d/boot0confirm runs -o update on successful boot to make permanent.
+boot0cfg -s 1 -o noupdate /dev/${NANO_DRIVE}

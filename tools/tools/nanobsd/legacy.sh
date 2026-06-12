@@ -217,6 +217,7 @@ create_diskimage() {
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	MNT=${NANO_OBJ}/_.mnt
 	mkdir -p ${MNT}
+    local _boot0_mask
 
 	if [ "${NANO_MD_BACKING}" = "swap" ]; then
 		MD=$(mdconfig -a -t swap -s ${NANO_MEDIASIZE} -x ${NANO_SECTS} \
@@ -251,7 +252,9 @@ create_diskimage() {
 	gpart show ${MD}
 	if [ -f ${NANO_WORLDDIR}/${NANO_BOOTLOADER} ]; then
 		gpart bootcode -b ${NANO_WORLDDIR}/${NANO_BOOTLOADER} ${NANO_BOOTFLAGS} ${MD}
-		boot0cfg ${NANO_BOOT0CFG} /dev/${MD}
+		# -m mask: bit0=s1, bit1=s2, bit2=s3; include s3 only when backup partition present
+		[ "${NANO_BACKUP_PART:-0}" -eq 1 ] && _boot0_mask=7 || _boot0_mask=3
+		boot0cfg ${NANO_BOOT0CFG} -m ${_boot0_mask} /dev/${MD}
 	fi
 
 	echo "Writing code image..."

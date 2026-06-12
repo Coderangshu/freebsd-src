@@ -87,7 +87,7 @@ setup_nanobsd_write_confs() {
 
 	_root_idx=1
 	nano_boot_type_is UEFI && _root_idx=$(( _root_idx + 2 ))
-	nano_boot_type_is BIOS && _root_idx=$(( _root_idx + 2 ))
+	nano_boot_type_is BIOS && _root_idx=$(( _root_idx + 1 ))
 	printf 'NANO_PART_ROOT_IDX=%d\n' "${_root_idx}" >> etc/nanobsd.conf
 	printf 'NANO_PART_ALTROOT_IDX=%d\n' "$(( _root_idx + 1 ))" >> etc/nanobsd.conf
 	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
@@ -114,6 +114,19 @@ setup_nanobsd_write_confs() {
 	printf 'vfs.root.mountfrom="ufs:/dev/%s%s"\n' \
 	    "${NANO_DRIVE}" "${NANO_SLICE_ROOT}" >> boot/loader.conf
 	tgt_touch boot/loader.conf
+
+	# Protect immutable partitions: mode 0440 prevents accidental writes from
+	# non-root processes.  efiboot1 is a write-once backup ESP; nanobsd3 is
+	# the permanent golden root — neither should be touched by update scripts.
+	if nano_boot_type_is UEFI; then
+		printf 'perm\tgpt/efiboot1\t0440\n' >> etc/devfs.conf
+	fi
+	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		printf 'perm\tgpt/%s3\t0440\n' "${NANO_NAME}" >> etc/devfs.conf
+	fi
+	if nano_boot_type_is UEFI || [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		tgt_touch etc/devfs.conf
+	fi
 	)
 }
 
@@ -345,9 +358,7 @@ _build_root_image() {
 	local _from="$1" _to="$2" _out="$3"
 	shift 3
 	tgt_switch_root_fstab "${_from}" "${_to}"
-	sed -i "" "s|${_from}|${_to}|g" "${NANO_WORLDDIR}/boot/loader.conf"
 	"$@" "${_out}" "${NANO_WORLDDIR}"
-	sed -i "" "s|${_to}|${_from}|g" "${NANO_WORLDDIR}/boot/loader.conf"
 	tgt_switch_root_fstab "${_to}" "${_from}"
 }
 

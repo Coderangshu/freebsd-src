@@ -160,7 +160,7 @@ NANO_RAM_ETCSIZE=10240
 NANO_RAM_TMPVARSIZE=10240
 
 # boot0 flags/options and configuration
-NANO_BOOT0CFG="-o packet -s 1 -m 3"
+NANO_BOOT0CFG="-o packet -s 1"
 NANO_BOOTLOADER="boot/boot0sio"
 
 # boot2 flags/options
@@ -974,7 +974,7 @@ tgt_switch_root_fstab() {
 		sed -i "" "s=${NANO_DRIVE}${current}=${NANO_DRIVE}${new}=g" "${f}"
 	done
 
-	if nano_boot_type_is BIOS && [ -f "${NANO_WORLDDIR}/boot/loader.conf" ]; then
+	if [ -f "${NANO_WORLDDIR}/boot/loader.conf" ]; then
 		sed -i "" "s=${NANO_DRIVE}${current}=${NANO_DRIVE}${new}=g" "${NANO_WORLDDIR}/boot/loader.conf"
 	fi
 }
@@ -1332,6 +1332,14 @@ setup_nanobsd_write_confs() {
 	printf '/dev/%s\t/\tufs\tro\t1\t1\n' "${NANO_DRIVE}${NANO_ROOT}" > etc/fstab
 	printf '/dev/%s\t/cfg\tufs\trw,noauto\t2\t2\n' "${NANO_DRIVE}${NANO_SLICE_CFG}" >> etc/fstab
 	tgt_touch etc/fstab
+
+	# Install boot0 confirm RC script for MBR try-once boot resilience.
+	# updatep*.mbr uses -o noupdate; this script confirms on successful boot.
+	local _boot0confirm="${NANO_SRC}/${NANO_TOOLS}/Files/etc/rc.d/boot0confirm"
+	if [ -f "${_boot0confirm}" ]; then
+		install -m 755 "${_boot0confirm}" "etc/rc.d/boot0confirm"
+		tgt_touch etc/rc.d/boot0confirm
+	fi
 	)
 }
 
