@@ -61,7 +61,7 @@ gpart set -a active -i 2 ${NANO_DRIVE}
 
 # Write rollback marker to cfg: boot0once reads this on the new slice and
 # pre-schedules the rollback before boot0confirm can make it permanent.
-_cur_slice=$(mount | awk '$3 == "/" { match($1, /s([0-9]+)a$/, a); print "s" a[1]; exit }')
+_cur_slice=$(mount | awk '$3 == "/" { if (match($1, /s[0-9]+a$/)) print substr($1, RSTART, RLENGTH-1); exit }')
 if [ -n "${_cur_slice}" ] && [ -n "${NANO_SLICE_CFG}" ]; then
 	mount -uw /dev/${NANO_DRIVE}${NANO_SLICE_CFG} /cfg 2>/dev/null || \
 	    mount /cfg 2>/dev/null || true

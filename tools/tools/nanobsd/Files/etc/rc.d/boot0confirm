@@ -29,7 +29,7 @@ boot0confirm_start()
 	local slice
 
 	# Determine active slice number from root mount device (e.g. /dev/ada0s2a -> 2)
-	slice=$(mount | awk '$3 == "/" { match($1, /s([0-9]+)a$/, a); print a[1]; exit }')
+	slice=$(mount | awk '$3 == "/" { if (match($1, /s[0-9]+a$/)) print substr($1, RSTART+1, RLENGTH-2); exit }')
 	if [ -z "${slice}" ]; then
 		warn "${name}: cannot determine current boot slice"
 		return 1

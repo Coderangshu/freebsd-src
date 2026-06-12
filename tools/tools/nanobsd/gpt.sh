@@ -702,14 +702,14 @@ _create_diskimage() {
 # of the MBR variants.
 cust_install_files() (
 	cd "${NANO_TOOLS}/Files"
-	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/|/updatep[12]\.(gpt|mbr)$' |
+	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/|/updatep[12]\.(gpt|mbr)$|/etc/rc\.d/boot0(confirm|once)$' |
 	    cpio ${CPIO_SYMLINK} -Ldumpv ${NANO_WORLDDIR}
 
 	if [ -n "${NANO_CUST_FILES_MTREE}" -a -f ${NANO_CUST_FILES_MTREE} ]; then
 		CR "mtree -eiU -p /" <${NANO_CUST_FILES_MTREE}
 	fi
 
-	tgt_touch $(find * -type f | grep -Ev '^root/updatep[12]\.(gpt|mbr)$')
+	tgt_touch $(find * -type f | grep -Ev '^root/updatep[12]\.(gpt|mbr)$|^etc/rc\.d/boot0(confirm|once)$')
 
 	install -m 755 "${NANO_TOOLS}/Files/root/updatep1.gpt" \
 	    "${NANO_WORLDDIR}/root/updatep1"
