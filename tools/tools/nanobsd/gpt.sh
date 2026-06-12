@@ -87,7 +87,9 @@ setup_nanobsd_write_confs() {
 
 	_root_idx=1
 	nano_boot_type_is UEFI && _root_idx=$(( _root_idx + 2 ))
-	nano_boot_type_is BIOS && _root_idx=$(( _root_idx + 1 ))
+	if nano_boot_type_is BIOS && [ -f "boot/gptboot" ]; then
+		_root_idx=$(( _root_idx + 1 ))
+	fi
 	printf 'NANO_PART_ROOT_IDX=%d\n' "${_root_idx}" >> etc/nanobsd.conf
 	printf 'NANO_PART_ALTROOT_IDX=%d\n' "$(( _root_idx + 1 ))" >> etc/nanobsd.conf
 	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
@@ -363,6 +365,37 @@ _build_root_image() {
 }
 
 #
+# Stamp initial bootme attributes on a freshly assembled GPT disk image:
+#   A (ROOT_IDX)   — bootme: default boot target on first power-on
+#   C (BACKUP_IDX) — bootme: permanent golden fallback, never cleared
+#
+# gptboot.efi scans partitions in index order and boots the first one with
+# bootme (or bootonce).  A < B < C in index order, so A wins normally; C
+# wins only when both A and B have no bootme and no bootonce (i.e. both
+# failed to confirm).
+#
+# Input: $1 = path to disk image file
+#
+_stamp_initial_bootme() {
+	local _img="$1" _root_idx _bkp_idx _md
+	_root_idx=$(awk -F= '/^NANO_PART_ROOT_IDX/{print $2}' \
+	    "${NANO_WORLDDIR}/etc/nanobsd.conf")
+	[ -n "${_root_idx}" ] || return 0
+	_md=$(mdconfig -a -t vnode -f "${_img}")
+	gpart set -a bootme -i "${_root_idx}" "${_md}" ||
+	    echo "Warning: could not set bootme on A (idx ${_root_idx})"
+	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		_bkp_idx=$(awk -F= '/^NANO_PART_BACKUP_IDX/{print $2}' \
+		    "${NANO_WORLDDIR}/etc/nanobsd.conf")
+		if [ -n "${_bkp_idx}" ]; then
+			gpart set -a bootme -i "${_bkp_idx}" "${_md}" ||
+			    echo "Warning: could not set bootme on C (idx ${_bkp_idx})"
+		fi
+	fi
+	mdconfig -d -u "${_md}"
+}
+
+#
 # Assemble the final GPT disk image with optional EFI/BIOS boot partitions,
 # root A/B, cfg, and data partitions using mkimg.  Builds root images directly
 # from NANO_WORLDDIR without a metalog spec.  Used for normal (root) builds.
@@ -502,6 +535,8 @@ create_diskimage() {
 	    ${swapimage} \
 	    ${dataimage} \
 	    -o "${img}"
+
+	_stamp_initial_bootme "${img}"
 
 	[ -n "${espfile}" ] && rm -f "${espfile}"
 	[ -n "${espfile2}" ] && rm -f "${espfile2}"
@@ -650,6 +685,8 @@ _create_diskimage() {
 	    ${swapimage} \
 	    ${dataimage} \
 	    -o "${img}"
+
+	_stamp_initial_bootme "${img}"
 
 	[ -n "${espfile}" ] && rm -f "${espfile}"
 	[ -n "${espfile2}" ] && rm -f "${espfile2}"

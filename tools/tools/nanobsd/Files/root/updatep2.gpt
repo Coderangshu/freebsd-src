@@ -34,28 +34,28 @@ set -e
 
 . /etc/nanobsd.conf
 
-if mount | grep -q "/dev/gpt/${NANO_NAME}2"; then
+if mount | grep -q "/dev/${NANO_DRIVE}2"; then
 	echo "You are running partition 2 already"
 	echo "you probably want to use 'updatep1' instead"
 	exit 1
 fi
 
 # Find the physical disk backing the GPT label
-NANO_DISK=$(glabel status | awk -v lbl="gpt/${NANO_NAME}2" \
+NANO_DISK=$(glabel status | awk -v lbl="${NANO_DRIVE}2" \
     '$1 == lbl { sub(/p[0-9]+$/, "", $3); print $3; exit }')
 if [ -z "${NANO_DISK}" ]; then
-	echo "Cannot find disk for gpt/${NANO_NAME}2" >&2
+	echo "Cannot find disk for ${NANO_DRIVE}2" >&2
 	exit 1
 fi
 
 # Blow away old system
-dd if=/dev/zero of=/dev/gpt/${NANO_NAME}2 bs=1m count=1 > /dev/null 2>&1
+dd if=/dev/zero of=/dev/${NANO_DRIVE}2 bs=1m count=1 > /dev/null 2>&1
 
 # Copy in new system
-dd of=/dev/gpt/${NANO_NAME}2 obs=64k
+dd of=/dev/${NANO_DRIVE}2 obs=64k
 
 # Check that it worked
-fsck_ffs -n /dev/gpt/${NANO_NAME}2
+fsck_ffs -n /dev/${NANO_DRIVE}2
 
 # Set bootonce: try partition 2 on next boot. /etc/rc.d/gptboot confirms
 # on successful boot and clears bootonce; on crash gptboot marks it bootfailed

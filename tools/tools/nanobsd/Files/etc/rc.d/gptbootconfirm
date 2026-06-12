@@ -1,0 +1,96 @@
+#!/bin/sh
+#
+# Confirm current GPT root partition as permanent boot default.
+#
+# gptboot/gptboot.efi use GPT attributes to select boot partition:
+#   bootonce  - try exactly once (set by updatep scripts)
+#   bootme    - permanent default
+#   bootfailed - failed partition (avoid)
+#
+# After a successful boot into a bootonce partition, this script
+# clears bootonce/bootfailed on the current partition, sets bootme
+# on it, and clears bootme from the other root partitions.
+
+# PROVIDE: gptbootconfirm
+# REQUIRE: mountcritlocal
+# BEFORE: LOGIN
+
+name="gptbootconfirm"
+rcvar="gptbootconfirm_enable"
+start_cmd="gptbootconfirm_start"
+stop_cmd=":"
+
+. /etc/rc.subr
+. /etc/nanobsd.conf
+
+load_rc_config ${name}
+: ${gptbootconfirm_enable:="YES"}
+
+gptbootconfirm_start()
+{
+	local cur_dev cur_label component disk cur_idx other_idx
+
+	cur_dev=$(mount | awk '$3 == "/" { print $1; exit }')
+	if [ -z "${cur_dev}" ]; then
+		warn "${name}: cannot determine current root device"
+		return 1
+	fi
+
+	# Expect /dev/gpt/NAMEn
+	cur_label=${cur_dev#/dev/gpt/}
+	if [ "${cur_label}" = "${cur_dev}" ]; then
+		warn "${name}: root not on GPT label device: ${cur_dev}"
+		return 1
+	fi
+
+	component=$(glabel status | awk -v lbl="gpt/${cur_label}" \
+	    '$1 == lbl { print $3; exit }')
+	if [ -z "${component}" ]; then
+		warn "${name}: cannot find component for ${cur_dev}"
+		return 1
+	fi
+
+	disk=${component%p*}
+	cur_idx=${component##*p}
+
+	if [ -z "${disk}" ] || [ -z "${cur_idx}" ]; then
+		warn "${name}: cannot parse disk/index from ${component}"
+		return 1
+	fi
+
+	if [ -z "${NANO_PART_ROOT_IDX}" ] || [ -z "${NANO_PART_ALTROOT_IDX}" ]; then
+		warn "${name}: NANO_PART_ROOT_IDX/NANO_PART_ALTROOT_IDX not set"
+		return 1
+	fi
+
+	# C (BACKUP_IDX) is the permanent golden fallback — already has bootme set at
+	# image creation time.  If we boot into it, do nothing: stay on C until the
+	# operator runs updatep1 or updatep2 to move back to A or B.
+	if [ -n "${NANO_PART_BACKUP_IDX}" ] && \
+	   [ "${cur_idx}" -eq "${NANO_PART_BACKUP_IDX}" ]; then
+		echo "${name}: booted from golden partition C (idx ${cur_idx}), no action"
+		return 0
+	fi
+
+	# Map current A/B partition index to the other A/B index
+	if [ "${cur_idx}" -eq "${NANO_PART_ROOT_IDX}" ]; then
+		other_idx=${NANO_PART_ALTROOT_IDX}
+	elif [ "${cur_idx}" -eq "${NANO_PART_ALTROOT_IDX}" ]; then
+		other_idx=${NANO_PART_ROOT_IDX}
+	else
+		warn "${name}: partition ${cur_idx} not in root set" \
+		    "(root=${NANO_PART_ROOT_IDX} alt=${NANO_PART_ALTROOT_IDX})"
+		return 1
+	fi
+
+	# Confirm current A/B partition as permanent default
+	gpart unset -a bootonce   -i ${cur_idx} ${disk} 2>/dev/null || true
+	gpart unset -a bootfailed -i ${cur_idx} ${disk} 2>/dev/null || true
+	gpart set   -a bootme     -i ${cur_idx} ${disk} &&
+	    echo "${name}: ${cur_dev} (idx ${cur_idx}) confirmed as permanent boot default"
+
+	# Clear bootme from the other A/B slot
+	gpart unset -a bootme -i ${other_idx} ${disk} 2>/dev/null || true
+}
+
+run_rc_command "$1"
