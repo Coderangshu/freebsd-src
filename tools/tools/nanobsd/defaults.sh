@@ -1996,7 +1996,7 @@ EOF
 
 	tgt_pkg info
 
-	rm -rf "${NANO_WORLDDIR}/var/db/pkg/triggers"
+	_xxx_tgt_pkg_triggers
 }
 
 #######################################################################
