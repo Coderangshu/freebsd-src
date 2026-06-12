@@ -58,6 +58,17 @@ sed -i "" "s/${NANO_DRIVE}s1/${NANO_DRIVE}s2/" /mnt/etc/fstab
 umount /mnt
 trap 1 2 15 EXIT
 gpart set -a active -i 2 ${NANO_DRIVE}
+
+# Write rollback marker to cfg: boot0once reads this on the new slice and
+# pre-schedules the rollback before boot0confirm can make it permanent.
+_cur_slice=$(mount | awk '$3 == "/" { match($1, /s([0-9]+)a$/, a); print "s" a[1]; exit }')
+if [ -n "${_cur_slice}" ] && [ -n "${NANO_SLICE_CFG}" ]; then
+	mount -uw /dev/${NANO_DRIVE}${NANO_SLICE_CFG} /cfg 2>/dev/null || \
+	    mount /cfg 2>/dev/null || true
+	echo "${_cur_slice}" > /cfg/.boot_rollback
+	umount /cfg 2>/dev/null || true
+fi
+
 # Try-once: set default slice but do not persist interactive selections.
 # /etc/rc.d/boot0confirm runs -o update on successful boot to make permanent.
 boot0cfg -s 2 -o noupdate /dev/${NANO_DRIVE}

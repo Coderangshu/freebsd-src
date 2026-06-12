@@ -277,10 +277,11 @@ create_diskimage() {
 		fi
 	fi
 
-	# Backup slice (s3) — permanent cold standby, copy of root A
+	# Backup slice C — permanent cold standby, copy of root A
 	if [ "${NANO_BACKUP_PART:-0}" -gt 0 ]; then
-		echo "Copying backup image to s3..."
-		dd conv=sparse if=/dev/${MD}${NANO_SLICE_ROOT} of=/dev/${MD}s3 bs=64k
+		echo "Copying backup image to ${NANO_SLICE_BACKUP}..."
+		dd conv=sparse if=/dev/${MD}${NANO_SLICE_ROOT} \
+		    of=/dev/${MD}${NANO_SLICE_BACKUP} bs=64k
 	fi
 
 	# Create Config slice
@@ -328,8 +329,11 @@ _create_diskimage() {
 	local altroot bootloader cfgimage dataimage diskimage
 
 	CODE_SIZE=$(awk '$3 == 1 {print $2}' "${NANO_LOG}/_.partitioning")
-	CONF_SIZE=$(awk '$3 == 3 {print $2}' "${NANO_LOG}/_.partitioning")
-	DATA_SIZE=$(awk '$3 == 4 {print $2}' "${NANO_LOG}/_.partitioning")
+	local _cfg_idx _data_idx
+	_cfg_idx=$(printf '%s' "${NANO_SLICE_CFG}" | tr -d 's')
+	_data_idx=$(printf '%s' "${NANO_SLICE_DATA}" | tr -d 's')
+	CONF_SIZE=$(awk -v idx="${_cfg_idx}" '$3 == idx {print $2}' "${NANO_LOG}/_.partitioning")
+	DATA_SIZE=$(awk -v idx="${_data_idx}" '$3 == idx {print $2}' "${NANO_LOG}/_.partitioning")
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 
 	if [ -f "${NANO_WORLDDIR}/${NANO_BOOTLOADER}" ]; then
@@ -364,6 +368,26 @@ _create_diskimage() {
 		altroot="-p-"
 	fi
 
+	# Create backup (C) slice — golden image, copy of A, never updated
+	local backupimage=""
+	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ] && [ "$NANO_INIT_IMG2" -gt 0 ]; then
+		echo "Creating backup (C) image..."
+		tgt_switch_root_fstab "${NANO_SLICE_ROOT}" "${NANO_SLICE_BACKUP}"
+		nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
+		    "${NANO_METALOG}" "$(( CODE_SIZE - METADATA_SECTS ))" \
+		    "${NANO_OBJ}/_.backup.part" "${NANO_WORLDDIR}"
+		tgt_switch_root_fstab "${NANO_SLICE_BACKUP}" "${NANO_SLICE_ROOT}"
+		if [ -f "${NANO_WORLDDIR}/boot/boot" ]; then
+			bootcode="-b ${NANO_WORLDDIR}/boot/boot"
+		fi
+		mkimg -s bsd -S 512 --capacity $(( CODE_SIZE * 512 )) \
+		    ${bootcode} \
+		    -p freebsd-ufs:="${NANO_OBJ}/_.backup.part" \
+		    -o "${NANO_OBJ}/_.backup.image"
+		backupimage="-p freebsd:=${NANO_OBJ}/_.backup.image:+$(( NANO_SECTS * 512 ))"
+		rm -f "${NANO_OBJ}/_.backup.part"
+	fi
+
 	# Create Config slice
 	_populate_cfg_part "${NANO_OBJ}/_.cfg.part" "${NANO_CFGDIR}" \
 	    "${NANO_SLICE_CFG}" "${CONF_SIZE}" "${NANO_METALOG_CFG}"
@@ -387,12 +411,14 @@ _create_diskimage() {
 	    ${bootloader} \
 	    ${diskimage} \
 	    ${altroot} \
+	    ${backupimage} \
 	    ${cfgimage} \
 	    ${dataimage} \
 	    -o ${IMG}
 
 	rm -f "${NANO_OBJ}/_.altroot.image" \
-	    "${NANO_OBJ}/_.cfg.part"\
+	    "${NANO_OBJ}/_.backup.image" \
+	    "${NANO_OBJ}/_.cfg.part" \
 	    "${NANO_OBJ}/_.data.part"
 	) > ${NANO_LOG}/_.di 2>&1
 }

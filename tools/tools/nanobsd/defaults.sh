@@ -194,11 +194,12 @@ PPLEVEL=3
 # Set NANO_LABEL to non-blank to form the basis for using /dev/ufs/label
 # in preference to /dev/${NANO_DRIVE}
 # Root partition will be ${NANO_LABEL}s{1,2}
-# /cfg partition will be ${NANO_LABEL}s3
-# /data partition will be ${NANO_LABEL}s4
+# When NANO_BACKUP_PART=0: cfg=s3, data=s4
+# When NANO_BACKUP_PART=1: backup=s3, cfg=s4, data=s5 (adjusted in set_defaults_and_export)
 NANO_LABEL=""
 NANO_SLICE_ROOT=s1
 NANO_SLICE_ALTROOT=s2
+NANO_SLICE_BACKUP=s3
 NANO_SLICE_CFG=s3
 NANO_SLICE_DATA=s4
 NANO_PARTITION_ROOT=a
@@ -1327,18 +1328,28 @@ setup_nanobsd_write_confs() {
 	(
 	cd "${NANO_WORLDDIR}"
 	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
+	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		printf 'NANO_SLICE_BACKUP=%s\n' "${NANO_SLICE_BACKUP}" >> etc/nanobsd.conf
+	fi
 	tgt_touch etc/nanobsd.conf
 
 	printf '/dev/%s\t/\tufs\tro\t1\t1\n' "${NANO_DRIVE}${NANO_ROOT}" > etc/fstab
 	printf '/dev/%s\t/cfg\tufs\trw,noauto\t2\t2\n' "${NANO_DRIVE}${NANO_SLICE_CFG}" >> etc/fstab
 	tgt_touch etc/fstab
 
-	# Install boot0 confirm RC script for MBR try-once boot resilience.
-	# updatep*.mbr uses -o noupdate; this script confirms on successful boot.
+	# Install boot0confirm (permanent confirm on success) and, when C partition
+	# is present, boot0once (try-once via /cfg marker for soft-failure rollback).
 	local _boot0confirm="${NANO_SRC}/${NANO_TOOLS}/Files/etc/rc.d/boot0confirm"
 	if [ -f "${_boot0confirm}" ]; then
 		install -m 755 "${_boot0confirm}" "etc/rc.d/boot0confirm"
 		tgt_touch etc/rc.d/boot0confirm
+	fi
+	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		local _boot0once="${NANO_SRC}/${NANO_TOOLS}/Files/etc/rc.d/boot0once"
+		if [ -f "${_boot0once}" ]; then
+			install -m 755 "${_boot0once}" "etc/rc.d/boot0once"
+			tgt_touch etc/rc.d/boot0once
+		fi
 	fi
 	)
 }
@@ -2210,4 +2221,11 @@ set_defaults_and_export() {
 	export_var NANO_LOG
 	export_var SRCCONF
 	export_var SRC_ENV_CONF
+
+	# MBR: golden C at s3 pushes cfg/data up one slot each.
+	# Must run after config is sourced so NANO_BACKUP_PART reflects user choice.
+	if [ "${NANO_USE_GPT:-0}" -eq 0 ] && [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		NANO_SLICE_CFG=s4
+		NANO_SLICE_DATA=s5
+	fi
 }

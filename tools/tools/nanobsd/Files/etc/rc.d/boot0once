@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# MBR try-once boot resilience.
+#
+# updatep*.mbr writes /cfg/.boot_rollback=<slice> before pointing boot0 at
+# the new slice.  This script runs early on the new slice and pre-schedules
+# the rollback: if this boot fails before boot0confirm runs, the next reboot
+# returns to the previously-confirmed slice.  boot0confirm overwrites the
+# rollback with the permanent setting if the new slice boots successfully.
+#
+# Hard failures (kernel panic / mount failure before any rc script) cannot
+# be recovered automatically — they require the operator to select a slice
+# from the boot0 menu (F1/F2/F3).
+
+# PROVIDE: boot0once
+# REQUIRE: mountcritlocal
+# BEFORE: NETWORKING
+
+name="boot0once"
+rcvar="boot0once_enable"
+start_cmd="boot0once_start"
+stop_cmd=":"
+
+. /etc/rc.subr
+. /etc/nanobsd.conf
+
+load_rc_config ${name}
+: ${boot0once_enable:="YES"}
+
+boot0once_start()
+{
+	local marker="/cfg/.boot_rollback" rollback_slice rollback_num
+
+	mount -uw /dev/${NANO_DRIVE}${NANO_SLICE_CFG} /cfg 2>/dev/null || \
+	    mount /cfg 2>/dev/null || true
+
+	if [ ! -f "${marker}" ]; then
+		umount /cfg 2>/dev/null || true
+		return 0
+	fi
+
+	rollback_slice=$(cat "${marker}")
+	rollback_num="${rollback_slice#s}"
+	rm -f "${marker}"
+
+	# Pre-schedule rollback: set boot0 to the old slice now (noupdate).
+	# If this boot succeeds, boot0confirm will overwrite with -o update.
+	# If this boot fails after this point, next reboot uses rollback_slice.
+	boot0cfg -s "${rollback_num}" -o noupdate /dev/${NANO_DRIVE} &&
+	    echo "${name}: staged rollback to ${rollback_slice} if boot fails"
+
+	umount /cfg 2>/dev/null || true
+}
+
+run_rc_command "$1"

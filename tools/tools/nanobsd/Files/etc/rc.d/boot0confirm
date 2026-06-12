@@ -35,6 +35,15 @@ boot0confirm_start()
 		return 1
 	fi
 
+	# C (NANO_SLICE_BACKUP) is the permanent golden fallback — never confirm it
+	# as the persistent boot0 default; leave it reachable via the boot0 menu.
+	if [ -n "${NANO_SLICE_BACKUP}" ]; then
+		if [ "${slice}" = "${NANO_SLICE_BACKUP#s}" ]; then
+			echo "${name}: booted from golden partition C (slice ${slice}), no action"
+			return 0
+		fi
+	fi
+
 	boot0cfg -s "${slice}" -o update /dev/${NANO_DRIVE} &&
 	    echo "${name}: boot slice ${slice} confirmed as permanent default"
 }

@@ -51,6 +51,19 @@ dd of=/dev/${NANO_DRIVE}s1 obs=64k
 fsck_ffs -n /dev/${NANO_DRIVE}s1a
 
 gpart set -a active -i 1 ${NANO_DRIVE}
+
+# Write rollback marker to cfg: if the new slice fails before boot0once runs,
+# the operator can see which slice was previously confirmed.  boot0once reads
+# this marker early in rc, pre-schedules the rollback in boot0, then deletes
+# it; boot0confirm overwrites the rollback with the permanent setting.
+_cur_slice=$(mount | awk '$3 == "/" { match($1, /s([0-9]+)a$/, a); print "s" a[1]; exit }')
+if [ -n "${_cur_slice}" ] && [ -n "${NANO_SLICE_CFG}" ]; then
+	mount -uw /dev/${NANO_DRIVE}${NANO_SLICE_CFG} /cfg 2>/dev/null || \
+	    mount /cfg 2>/dev/null || true
+	echo "${_cur_slice}" > /cfg/.boot_rollback
+	umount /cfg 2>/dev/null || true
+fi
+
 # Try-once: set default slice but do not persist interactive selections.
 # /etc/rc.d/boot0confirm runs -o update on successful boot to make permanent.
 boot0cfg -s 1 -o noupdate /dev/${NANO_DRIVE}
