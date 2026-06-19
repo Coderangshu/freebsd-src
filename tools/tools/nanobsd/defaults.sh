@@ -51,6 +51,8 @@ NANO_PACKAGE_LIST="*"
 # where package metadata gets placed
 NANO_PKG_META_BASE=/var/db
 
+# Path to the files directory used by cust_install_files()
+NANO_CUST_FILESDIR="${NANO_TOOLS}/Files"
 # Path to mtree file to apply to anything copied by cust_install_files().
 # If you specify this, the mtree file *must* have an entry for every file and
 # directory located in Files
@@ -1761,15 +1763,21 @@ cust_allow_ssh_root() {
 # Copy all files from NANO_TOOLS/Files into NANO_WORLDDIR
 cust_install_files() {
 	(
-	cd "${NANO_TOOLS}/Files"
+	cd "$NANO_CUST_FILESDIR"
 	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
-	    cpio ${CPIO_SYMLINK} -Ldumpv ${NANO_WORLDDIR}
+	    cpio ${CPIO_SYMLINK} -Ldumpv "$NANO_WORLDDIR"
 
-	if [ -n "${NANO_CUST_FILES_MTREE}" -a -f ${NANO_CUST_FILES_MTREE} ]; then
-		CR "mtree -eiU -p /" <${NANO_CUST_FILES_MTREE}
+	if [ -n "$NANO_CUST_FILES_MTREE" ] && [ -f "$NANO_CUST_FILES_MTREE" ]; then
+		if [ -n "$NANO_NOPRIV_BUILD" ]; then
+			# Entries in NANO_CUST_FILES_MTREE must precede NANO_METALOG
+			cat "$NANO_CUST_FILES_MTREE" "$NANO_METALOG" > "${NANO_METALOG}.tmp"
+			mv "${NANO_METALOG}.tmp" "$NANO_METALOG"
+		else
+			CR "mtree -eiU -p /" <"$NANO_CUST_FILES_MTREE"
+		fi
+	else
+		tgt_touch $(find * -type f)
 	fi
-
-	tgt_touch $(find * -type f)
 	)
 }
 

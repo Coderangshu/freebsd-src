@@ -60,6 +60,9 @@ NANO_DRIVE="gpt/${NANO_LABEL}" || true
 
 NANO_BOOTLOADER="boot/gptboot"
 
+NANO_CUST_FILESDIR="${NANO_TOOLS}/gpt/Files"
+NANO_CUST_FILES_MTREE="${NANO_TOOLS}/gpt/Files.mtree"
+
 # Create the /etc/fstab file
 tgt_write_fstab() {
 	(
@@ -499,28 +502,4 @@ tgt_switch_root_fstab() {
 		sed -i "" "s=/dev/gpt/efiboot${current}=/dev/gpt/efiboot${new}=g" "${f}"
 		sed -i "" "s=/dev/gpt/${NANO_LABEL}${current}=/dev/gpt/${NANO_LABEL}${new}=g" "${f}"
 	done
-}
-
-#######################################################################
-# Install the stuff under ./gpt/Files
-
-# Copy all files from NANO_TOOLS/gpt/Files into NANO_WORLDDIR
-cust_install_files() {
-	(
-	cd "${NANO_TOOLS}/gpt/Files"
-	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
-	    cpio ${CPIO_SYMLINK} -Ldumpv "$NANO_WORLDDIR"
-	)
-
-	if [ -z "$NANO_CUST_FILES_MTREE" ]; then
-		NANO_CUST_FILES_MTREE="${NANO_TOOLS}/gpt/Files.mtree"
-	fi
-	if [ -f "$NANO_CUST_FILES_MTREE" ]; then
-		if [ -n "${NANO_NOPRIV_BUILD}" ]; then
-			cat "$NANO_CUST_FILES_MTREE" "$NANO_METALOG" > "${NANO_METALOG}.tmp"
-			mv "${NANO_METALOG}.tmp" "$NANO_METALOG"
-		else
-			CR "mtree -eiU -p /" <"$NANO_CUST_FILES_MTREE"
-		fi
-	fi
 }
