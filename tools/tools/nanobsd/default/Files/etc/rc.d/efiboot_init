@@ -1,0 +1,233 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 [XXX]
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+
+# PROVIDE: efiboot_init
+# REQUIRE: FILESYSTEMS
+# BEFORE: LOGIN
+
+. /etc/rc.subr
+
+name="efiboot_init"
+desc="EFI BootOrder initializer"
+start_cmd="efiboot_init_start"
+start_postcmd="efiboot_init_poststart"
+stop_cmd=":"
+rcvar="efiboot_init_enable"
+
+PRIMARY_LOADER="/boot/efi/EFI/FreeBSD/loader.efi"
+SECONDARY_LOADER="/mnt/EFI/FreeBSD/loader.efi"
+
+# Return SHA-256 hex digest of $1 (loader.efi).
+_sha256_of() {
+	local f="$1"
+	if [ -z "$f" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then
+		echo ""
+		return 0
+	fi
+	sha256 -q "$f" 2>/dev/null
+}
+
+#
+# Validate a loader EFI binary: must be non-empty and, if NANO_LOADER_EFI_SHA256
+# is set, its SHA-256 must match.  Returns 0 (valid) or 1 (invalid/missing).
+#
+_validate_loader() {
+	local loader actual expected
+	loader="$1"
+	if [ ! -s "$loader" ]; then
+		return 1
+	fi
+	expected="${NANO_LOADER_EFI_SHA256:-}"
+	if [ -z "$expected" ]; then
+		# No baked hash — accept any non-empty file.
+		return 0
+	fi
+	actual=$(_sha256_of "$loader")
+	if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+		return 1
+	fi
+	return 0
+}
+
+#
+# Return NVRAM Boot#### IDs whose EFI device path resolves to $1.
+# Used to scrub stale entries whose label may have drifted.
+#
+_boot_id_for_path() {
+	local target="$1"
+	efibootmgr -v 2>/dev/null | awk -v t="$target" '
+		/^Boot[0-9A-Fa-f]{4}/ {
+			id = $1
+			path = ""
+		}
+		/^[[:space:]]*path:/ {
+			if (id != "" && $2 ~ /\\/) {
+				gsub(/\\/, "/", $2)
+				path = $2
+				if (path == t) print id
+				id = ""
+			}
+		}
+	'
+}
+
+#
+# Main start action:
+#   - Determines which ESP pair is current vs. alternate
+#   - Mounts both ESPs
+#   - Validates each loader binary
+#   - Wipes any stale NVRAM entries
+#   - Registers fresh Primary/Secondary ESP boot entries
+#   - Programs BootOrder so firmware tries the current root first
+#
+efiboot_init_start()
+{
+	local alt_esp current_root efi_altlabel efi_label
+	local nano_altroot nano_root
+	local p_alternate p_current p_efiboot1 p_efiboot2
+	local primary_valid secondary_valid
+	efi_umount=""
+
+	# BIOS-only images use gptboot for root selection, no NVRAM needed.
+	if [ ! -e /dev/gpt/efiboot0 ] || [ ! -e /dev/gpt/efiboot1 ]; then
+		return 0
+	fi
+
+	[ -f /etc/nanobsd.conf ] || err 1 "/etc/nanobsd.conf missing."
+	. /etc/nanobsd.conf
+
+	if [ -z "$NANO_DRIVE" ] || [ -z "$NANO_ROOT" ] || [ -z "$NANO_ALTROOT" ]; then
+		err 1 "Configuration variables are missing."
+	fi
+
+	p_efiboot1=$(gpart show -l "${NANO_DRIVE}" | awk '$4 == "efiboot1" {print $3}')
+	p_efiboot2=$(gpart show -l "${NANO_DRIVE}" | awk '$4 == "efiboot2" {print $3}')
+	if [ -z "$p_efiboot1" ]; then
+		err 1 "ERROR: Failed to detect efiboot1 partition index."
+	fi
+	if [ -z "$p_efiboot2" ]; then
+		startmsg "EFIBOOT INIT: efiboot2 absent (NANO_IMAGES=1); skipping NVRAM registration."
+		return 0
+	fi
+
+	current_root=$(df -n / | tail -n1 | cut -d' ' -f1)
+	case "$current_root" in
+	"/dev/gpt/${NANO_ALTROOT}")
+		p_current="$p_efiboot2"
+		p_alternate="$p_efiboot1"
+		alt_esp="efiboot1"
+		efi_label="Primary ESP"
+		efi_altlabel="Secondary ESP"
+		nano_root="$NANO_ALTROOT"
+		nano_altroot="$NANO_ROOT"
+		;;
+	"/dev/gpt/${NANO_ROOT}")
+		p_current="$p_efiboot1"
+		p_alternate="$p_efiboot2"
+		alt_esp="efiboot2"
+		efi_label="Primary ESP"
+		efi_altlabel="Secondary ESP"
+		nano_root="$NANO_ROOT"
+		nano_altroot="$NANO_ALTROOT"
+		;;
+	*)
+		err 1 "Invalid root device '$current_root'."
+		;;
+	esac
+
+	# "Primary ESP" already registered for THIS root — nothing to do.
+	if efibootmgr -v 2>/dev/null | grep -A5 'Primary ESP' | \
+	    grep -q "vfs.root.mountfrom=ufs:/dev/gpt/${nano_root}"; then
+		return 0
+	fi
+
+    # Mount EFI System Partitions
+	if ! mount | grep -q "on /boot/efi "; then
+		if mount /boot/efi > /dev/null 2>&1; then
+			efi_umount="/boot/efi"
+		else
+			err 1 "ERROR: Failed to mount /boot/efi (efiboot1)."
+		fi
+	fi
+	if ! mount | grep -q "on /mnt "; then
+		if mount_msdosfs /dev/gpt/"${alt_esp}" /mnt > /dev/null 2>&1; then
+			efi_umount="${efi_umount} /mnt"
+		else
+			err 1 "ERROR: Failed to mount /mnt (${alt_esp})."
+		fi
+	fi
+
+	primary_valid=0
+	secondary_valid=0
+	if [ "$efi_label" = "Primary ESP" ]; then
+		_validate_loader "$PRIMARY_LOADER" && primary_valid=1
+		_validate_loader "$SECONDARY_LOADER" && secondary_valid=1
+	else
+		_validate_loader "$PRIMARY_LOADER" && secondary_valid=1
+		_validate_loader "$SECONDARY_LOADER" && primary_valid=1
+	fi
+
+	if [ "$primary_valid" -eq 1 ] && [ "$secondary_valid" -eq 1 ]; then
+		startmsg "EFIBOOT INIT: NVRAM entries need refresh; re-registering."
+	elif [ "$primary_valid" -eq 0 ] && [ "$secondary_valid" -eq 0 ]; then
+		warn "efiboot_init: BOTH ESPs fail validation; leaving NVRAM empty so firmware uses efiboot0/gptboot.efi."
+		return 0
+	else
+		warn "efiboot_init: one ESP fails validation; re-registering only the valid side."
+	fi
+
+	for id in $(efibootmgr 2>/dev/null | awk '
+		/^Boot[0-9A-Fa-f]{4}/ { id = $1; }
+		/Primary ESP|Secondary ESP/ { print id; id = ""; }
+	'); do
+		efibootmgr -b "${id}" -B > /dev/null 2>&1 || true
+	done
+	# Also wipe by path match, in case a label drifted.
+	for id in $(_boot_id_for_path "/EFI/FreeBSD/loader.efi"); do
+		efibootmgr -b "${id}" -B > /dev/null 2>&1 || true
+	done
+
+	# Both ESPs share the same EFI path; capture IDs at creation time so
+	# we can distinguish them when only one side is registered.
+	local id_primary="" id_secondary=""
+	if [ "$primary_valid" -eq 1 ]; then
+		id_primary=$(efibootmgr -c -l "${PRIMARY_LOADER}" -a \
+		    -L "${efi_label}" \
+		    -e "vfs.root.mountfrom=ufs:/dev/gpt/${nano_root}" \
+		    2>/dev/null | awk 'NR==1 {print $1}')
+	fi
+	if [ "$secondary_valid" -eq 1 ]; then
+		id_secondary=$(efibootmgr -c -l "${SECONDARY_LOADER}" -a \
+		    -L "${efi_altlabel}" \
+		    -e "vfs.root.mountfrom=ufs:/dev/gpt/${nano_altroot}" \
+		    2>/dev/null | awk 'NR==1 {print $1}')
+	fi
+
+	# efiboot0/gptboot.efi covers first boot and post-update boots via
+	# removable-media fallback; these entries cover all subsequent boots.
+	local order=""
+	[ -n "$id_primary" ] && order="${id_primary}"
+	[ -n "$id_secondary" ] && order="${order:+${order},}${id_secondary}"
+	if [ -n "$order" ]; then
+		efibootmgr -o "${order}" > /dev/null 2>&1
+		startmsg "EFIBOOT INIT: BootOrder set to ${order}."
+	else
+		warn "efiboot_init: no valid entries to register; NVRAM untouched."
+	fi
+}
+
+# Unmount any ESPs that efiboot_init_start mounted (tracked in $efi_umount).
+efiboot_init_poststart()
+{
+	if [ -n "$efi_umount" ]; then
+		umount ${efi_umount} >/dev/null 2>&1
+	fi
+}
+
+load_rc_config $name
+efiboot_init_svcj="NO"
+run_rc_command "$1"
