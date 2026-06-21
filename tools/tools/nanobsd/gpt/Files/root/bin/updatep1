@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Copyright (c) 2004-2005 Poul-Henning Kamp.
+# Copyright (c) 2004-2005.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -24,31 +24,51 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-#
-# Script to update partition 1 on a NanoBSD MBR system.
+# Script to update partition 1 on a NanoBSD GPT system.
 #
 # usage:
-#	ssh somewhere cat image.s1 | sh updatep1
+#	ssh somewhere cat image | sh updatep1
 #
 
 set -e
 
 . /etc/nanobsd.conf
 
-if mount | grep ${NANO_DRIVE}s1 > /dev/null ; then
+if mount | grep -q "/dev/${NANO_DRIVE}1"; then
 	echo "You are running partition 1 already"
 	echo "you probably want to use 'updatep2' instead"
 	exit 1
 fi
 
-# Blow away old system.
-dd if=/dev/zero of=/dev/${NANO_DRIVE}s1 bs=1m count=1 > /dev/null 2>&1
+# Find the physical disk backing the GPT label
+NANO_DISK=$(glabel status | awk -v lbl="${NANO_DRIVE}1" \
+    '$1 == lbl { sub(/p[0-9]+$/, "", $3); print $3; exit }')
+if [ -z "${NANO_DISK}" ]; then
+	echo "Cannot find disk for ${NANO_DRIVE}1" >&2
+	exit 1
+fi
+
+# Blow away old system
+dd if=/dev/zero of=/dev/${NANO_DRIVE}1 bs=1m count=1 > /dev/null 2>&1
 
 # Copy in new system
-dd of=/dev/${NANO_DRIVE}s1 obs=64k
+dd of=/dev/${NANO_DRIVE}1 obs=64k
 
 # Check that it worked
-fsck_ffs -n /dev/${NANO_DRIVE}s1a
+fsck_ffs -n /dev/${NANO_DRIVE}1
 
-gpart set -a active -i 1 ${NANO_DRIVE}
-boot0cfg -s 1 ${NANO_DRIVE}
+# Wipe NVRAM so the next boot goes through the firmware's removable-
+# media fallback path, which finds efiboot0 (gptboot.efi) first. Any
+# loader.efi entries in NVRAM would shadow gptboot.efi and bypass the
+# bootme/bootonce attribute logic. The || true keeps `set -e` happy
+# when NVRAM is already empty or the firmware doesn't implement
+# bulk delete.
+efibootmgr -B 2>/dev/null || true
+
+# Set bootonce: try partition 1 on next boot. /etc/rc.d/gptboot confirms
+# on successful boot and clears bootonce; on crash gptboot marks it bootfailed
+# and falls back to the other partition automatically.
+# Note: gpart set -a bootonce implicitly sets bootme as well (see
+# sys/geom/part/g_part_gpt.c) so the new partition is selected on the
+# BOOTME && BOOTONCE pass in gptboot.efi's gptfind.
+gpart set -a bootonce -i ${NANO_PART_ROOT_IDX} ${NANO_DISK}
