@@ -1554,19 +1554,28 @@ newfs_part() {
 # $4 = output image path, $5 = source dir
 #
 nano_makefs() {
-	local dir image metalog options size
+	local dir image image_bytes metalog options part_bytes size
 	options=$1
 	metalog=$2
 	size=$3
 	image=$4
 	dir=$5
 
+	part_bytes=$(( size * NANO_SECTOR_SIZE ))
+
 	if [ -n "$metalog" ] && [ -f "$metalog" ]; then
 		makefs -t ffs -DxZ ${options} -F "$metalog" -N "${NANO_WORLDDIR}/etc" \
-		    -R "${size}b" -T "$NANO_TIMESTAMP" "$image" "$dir"
+		    -R "${part_bytes}" -T "$NANO_TIMESTAMP" "$image" "$dir"
 	else
 		makefs -t ffs -Z ${options} -N "${NANO_WORLDDIR}/etc" \
-		    -R "${size}b" -T "$NANO_TIMESTAMP" "$image" "$dir"
+		    -R "${part_bytes}" -T "$NANO_TIMESTAMP" "$image" "$dir"
+	fi
+
+	image_bytes=$(stat -f %z "$image")
+	if [ "${image_bytes}" -gt "${part_bytes}" ]; then
+		err "ERROR: image ${image} (${image_bytes} bytes) exceeds" \
+		    "partition (${part_bytes} bytes). Increase NANO_MEDIASIZE" \
+		    "or the corresponding partition size."
 	fi
 }
 
