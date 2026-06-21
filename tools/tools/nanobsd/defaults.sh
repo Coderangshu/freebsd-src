@@ -1493,8 +1493,9 @@ get_bootcode() {
 		# For the Recovery ESP with ZFS, we want /boot/loader.efi,
 		# coupled with a bare-minimum zpool-features(7)?
 		case "$part_type" in
-		[Gg][Pp][Tt]) echo "boot/loader.efi" ;;
-		[Zz][Ff][Ss]) echo "boot/loader.efi" ;;
+		#[Gg][Pp][Tt]) echo "boot/loader.efi" ;;
+		#[Zz][Ff][Ss]) echo "boot/loader.efi" ;;
+		[Gg][Pp][Tt]) echo "boot/gptboot.efi" ;;
 		*) err "Unsupported UEFI partition type '${part_type}'" ;;
 		esac
 		;;

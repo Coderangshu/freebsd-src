@@ -36,9 +36,9 @@ NANO_PLAN=gpt
 # Notes common to all layouts:
 #   - [PMBR boot code] is written via "mkimg -b boot/pmbr"; it is the
 #     protective MBR boot code, not a GPT partition entry.
-#   - ESPs: efiboot0 is the recovery ESP, efiboot1 the primary ESP
-#     (mounted at /boot/efi), efiboot2 the secondary ESP, only created
-#     when NANO_IMAGES > 1.
+#   - efiboot0 is the sole ESP (gptboot.efi).  When NANO_THREE_ESP=1,
+#     efiboot1 (primary, loader.efi, mounted /boot/efi) and efiboot2
+#     (secondary, loader.efi, only when NANO_IMAGES > 1) are also added.
 #   - [freebsd-swap/swap0] is only created when NANO_SWAP_SIZE > 0.
 #   - root B (${NANO_LABEL}2) only exists when NANO_IMAGES > 1.
 #   - root C (${NANO_LABEL}3) only exists when NANO_BACKUP_PART=1.
@@ -54,9 +54,7 @@ NANO_PLAN=gpt
 #   [freebsd-ufs/data]              data partition (optional)
 #
 # "UEFI":
-#   [efi/efiboot0]                  recovery ESP (FAT)
-#   [efi/efiboot1]                  primary ESP (FAT, mounted /boot/efi)
-#   [efi/efiboot2]                  secondary ESP (FAT)
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
 #   [freebsd-swap/swap0]            swap (optional)
 #   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
 #   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
@@ -67,9 +65,7 @@ NANO_PLAN=gpt
 # "BIOS UEFI" (default):
 #   [PMBR boot code]                boot/pmbr (not a GPT entry)
 #   [freebsd-boot/gptboot0]         /boot/gptboot
-#   [efi/efiboot0]                  recovery ESP (FAT)
-#   [efi/efiboot1]                  primary ESP (FAT, mounted /boot/efi)
-#   [efi/efiboot2]                  secondary ESP (FAT)
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
 #   [freebsd-swap/swap0]            swap (optional)
 #   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
 #   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
@@ -86,6 +82,13 @@ NANO_BOOT_TYPE="BIOS UEFI"
 
 # EFI System Partition size in 512 bytes sectors
 NANO_EFI_BOOTPART_SIZE=532480
+
+#
+# When 1, add efiboot1 (primary, loader.efi) and efiboot2 (secondary,
+# loader.efi, only when NANO_IMAGES > 1) alongside the recovery efiboot0.
+# This is an experimental efibootmgr-based A/B boot scheme; leave at 0.
+#
+NANO_THREE_ESP=0
 
 # Set NANO_LABEL to non-blank to form the basis for using /dev/gpt/code
 # in preference to /dev/${NANO_DRIVE}
@@ -130,12 +133,20 @@ tgt_write_fstab() {
 	if [ "${NANO_BACKUP_PART}" -eq 1 ]; then
 		echo "NANO_BACKUP=${NANO_BACKUP}" >> etc/nanobsd.conf
 	fi
+	if [ "${NANO_THREE_ESP:-0}" -eq 1 ]; then
+		# Bake loader.efi SHA-256 for efiboot_init NVRAM validation.
+		echo "NANO_LOADER_EFI_SHA256=$(_loader_efi_sha256)" >> etc/nanobsd.conf
+	fi
+
 	# Bake the GPT partition indices used by the runtime gptboot script
 	_pidx=0
 	is_boot_type BIOS && _pidx=$(( _pidx + 1 ))			# gptboot0
 	if is_boot_type UEFI; then
-		_pidx=$(( _pidx + 2 ))					# efiboot0 + efiboot1
-		[ "$NANO_IMAGES" -gt 1 ] && _pidx=$(( _pidx + 1 ))	# efiboot2
+		_pidx=$(( _pidx + 1 ))					# efiboot0
+		if [ "${NANO_THREE_ESP:-0}" -eq 1 ]; then
+			_pidx=$(( _pidx + 1 ))				# efiboot1
+			[ "$NANO_IMAGES" -gt 1 ] && _pidx=$(( _pidx + 1 ))  # efiboot2
+		fi
 	fi
 	[ "$NANO_SWAP_SIZE" -gt 0 ] && _pidx=$(( _pidx + 1 ))		# swap0
 	echo "NANO_PART_ROOT_IDX=$(( _pidx + 1 ))" >> etc/nanobsd.conf
@@ -149,7 +160,7 @@ tgt_write_fstab() {
 	tgt_touch etc/nanobsd.conf
 
 	printf_fstab "# Device" Mountpoint FStype Options Dump "Pass#"
-	if is_boot_type UEFI; then
+	if is_boot_type UEFI && [ "${NANO_THREE_ESP:-0}" -eq 1 ]; then
 		printf_fstab "/dev/gpt/efiboot1" /boot/efi msdosfs rw,noauto 2 2
 	fi
 	printf_fstab "/dev/gpt/${NANO_ROOT}" / ufs ro 1 1
@@ -277,16 +288,19 @@ make_esp_partition() {
 	fi
 
 	efibootname=$(get_uefi_bootname)
-	bootcode="${NANO_WORLDDIR}/$(get_bootcode uefi gpt)"
-
-	if [ ! -f "$bootcode" ]; then
-		echo "Image will not be bootable"
-	fi
 
 	if [ "$is_recovery" = "recovery" ]; then
-		cp -p "${NANO_WORLDDIR}/boot/gptboot.efi" \
-		    "${espdir}/EFI/BOOT/${efibootname}.EFI"
+		bootcode="${NANO_WORLDDIR}/boot/gptboot.efi"
+		if [ ! -f "$bootcode" ]; then
+			echo "Image will not be bootable"
+		fi
+		cp -p "$bootcode" "${espdir}/EFI/BOOT/${efibootname}.EFI"
 	else
+		# NANO_THREE_ESP=1 path: loader.efi tied to a specific root
+		bootcode="${NANO_WORLDDIR}/boot/loader.efi"
+		if [ ! -f "$bootcode" ]; then
+			echo "Image will not be bootable"
+		fi
 		cp -p "$bootcode" "${espdir}/EFI/FreeBSD/loader.efi"
 	fi
 
@@ -326,7 +340,7 @@ calculate_partitioning() {
 	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
 	    "$boot_sects" "$esp_sects" "$NANO_SWAP_SIZE" "$NANO_ROOT" \
 	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
-	    "${NANO_BACKUP_PART}" "$NANO_BACKUP" |
+	    "${NANO_BACKUP_PART}" "$NANO_BACKUP" "${NANO_THREE_ESP:-0}" |
 	    awk '
 	function roundup(sects) {
 		return int((sects + align - 1) / align) * align
@@ -394,18 +408,16 @@ calculate_partitioning() {
 		avail_sects -= (align - sstart)
 		sstart = align
 
-		# Recovery ESP (if any)
+		# ESP (if any)
 		if (esp_sects > 0) {
 			print_line("efi", esp_sects, "efiboot0")
 		}
 
-		# Primary ESP (if any)
-		if (esp_sects > 0) {
+		# NANO_THREE_ESP=1: primary and secondary ESPs (loader.efi)
+		if (esp_sects > 0 && $17 == 1) {
 			print_line("efi", esp_sects, "efiboot1")
 		}
-
-		# Secondary ESP (if any)
-		if (esp_sects > 0 && $2 > 1) {
+		if (esp_sects > 0 && $17 == 1 && $2 > 1) {
 			print_line("efi", esp_sects, "efiboot2")
 		}
 
@@ -458,6 +470,57 @@ calculate_partitioning() {
 	}' > "${NANO_LOG}/_.partitioning"
 }
 
+#
+# Stamp initial GPT bootme attributes on a freshly assembled disk image:
+#   root A - bootme: default boot target on first power-on
+#   root C - bootme: permanent golden fallback (only when NANO_BACKUP_PART=1)
+# Input: $1 = path to the assembled disk image
+#
+_stamp_initial_bootme() {
+	local img root_idx bkp_idx md
+
+	img="$1"
+
+	if [ -n "${NANO_NOPRIV_BUILD}" ]; then
+		echo "Skipping bootme stamp (unprivileged build)"
+		return 0
+	fi
+
+	root_idx=$(awk -F= '/^NANO_PART_ROOT_IDX/{print $2}' \
+	    "${NANO_WORLDDIR}/etc/nanobsd.conf")
+	[ -n "${root_idx}" ] || return 0
+
+	md=$(mdconfig -a -t vnode -f "${img}")
+	gpart set -a bootme -i "${root_idx}" "${md}" ||
+	    echo "Warning: could not set bootme on root A (index ${root_idx})"
+
+	if [ "${NANO_BACKUP_PART}" -eq 1 ]; then
+		bkp_idx=$(awk -F= '/^NANO_PART_BACKUP_IDX/{print $2}' \
+		    "${NANO_WORLDDIR}/etc/nanobsd.conf")
+		if [ -n "${bkp_idx}" ]; then
+			gpart set -a bootme -i "${bkp_idx}" "${md}" ||
+			    echo "Warning: could not set bootme on root C (index ${bkp_idx})"
+		fi
+	fi
+
+	mdconfig -d -u "${md}"
+}
+
+#
+# Compute SHA-256 of the loader.efi. efiboot_init uses this at boot
+# to validate NVRAM entries and refuse to trust an entry pointing at
+# a corrupt or stale ESP. 
+#
+_loader_efi_sha256() {
+	local loader="${NANO_WORLDDIR}/boot/loader.efi"
+	if [ ! -f "${loader}" ]; then
+		echo "WARN: boot/loader.efi missing; ESP validation disabled" >&2
+		echo ""
+		return 0
+	fi
+	sha256 -q "${loader}"
+}
+
 # Create the code partition image
 create_code_partition() {
 	pprint 2 "build code partition"
@@ -508,17 +571,12 @@ create_diskimage() {
 
 	for image in gptboot0 efiboot0 efiboot1 efiboot2 swap0 \
 	    ${NANO_ROOT} ${NANO_ALTROOT} ${NANO_BACKUP} cfg data; do
-		match=$(awk -v dir="$NANO_OBJ" -v img="$image" \
-			-v ssize="$NANO_SECTOR_SIZE" \
-			-v root="${NANO_ROOT}" -v backup="${NANO_BACKUP}" \
+		match=$(awk -v dir="$NANO_OBJ" -v img="$image" -v ssize="$NANO_SECTOR_SIZE" \
 			'$5 == img {
-				type = $2
-				if (img == root || (backup != "" && img == backup))
-					type = type "+bootme"
 				if ($5 == "swap0") {
-					print "-p", type "/" $5 "::" ($4 * ssize) ":" ($3 * ssize)
+					print "-p", $2 "/" $5 "::" ($4 * ssize) ":" ($3 * ssize)
 				} else {
-					print "-p", type "/" $5 ":=" dir "/_." $5 ".image:" ($3 * ssize)
+					print "-p", $2 "/" $5 ":=" dir "/_." $5 ".image:" ($3 * ssize)
 				}
 			}' "${NANO_LOG}/_.partitioning")
 
@@ -542,11 +600,13 @@ create_diskimage() {
 		make_boot_partition "gptboot0"
 	fi
 
-	# Create recovery, primary and secondary ESPs (if any)
+	# Create ESP(s) (if any)
 	if is_boot_type UEFI; then
 		make_esp_partition "efiboot0" "recovery"
-		make_esp_partition "efiboot1"
-		make_esp_partition "efiboot2"
+		if [ "${NANO_THREE_ESP:-0}" -eq 1 ]; then
+			make_esp_partition "efiboot1"
+			[ "$NANO_IMAGES" -gt 1 ] && make_esp_partition "efiboot2"
+		fi
 	fi
 
 	# Swap partition must be greater than 100 MiB
@@ -616,6 +676,9 @@ create_diskimage() {
 	    ${cfg} \
 	    ${data} \
 	    -o ${IMG}
+
+	# Stamp default/fallback bootme attributes on the assembled image
+	_stamp_initial_bootme "${IMG}"
 
 	# Cleanup
 	rm -f "${NANO_OBJ}/_.gptboot0.image" \
