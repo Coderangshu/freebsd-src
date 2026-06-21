@@ -51,6 +51,15 @@ NANO_PACKAGE_LIST="*"
 # where package metadata gets placed
 NANO_PKG_META_BASE=/var/db
 
+NANO_PKGLIST=""				        # path to pkglist file (ports origins, one per line)
+NANO_POUDRIERE_JAIL="nanobsd"		# poudriere jail name
+NANO_POUDRIERE_PORTS="latest"		# poudriere ports tree name
+NANO_POUDRIERE_ZPOOL=""			    # ZFS pool for poudriere (required when NANO_PKGLIST set)
+NANO_POUDRIERE_DATA="/usr/local/poudriere/data"
+NANO_POUDRIERE_CONF="/usr/local/etc/poudriere.conf"
+NANO_POUDRIERE_PORTS_URL="https://github.com/freebsd/freebsd-ports.git"
+NANO_POUDRIERE_PORTS_BRANCH="main"
+
 # Path to mtree file to apply to anything copied by cust_install_files().
 # If you specify this, the mtree file *must* have an entry for every file and
 # directory located in Files
@@ -1826,35 +1835,144 @@ cust_install_files() {
 }
 
 #######################################################################
+# Poudriere helpers (called automatically by cust_pkgng when NANO_PKGLIST is set)
+
+# Set NANO_POUDRIERE_CONF with the required ZPOOL and BUILD_AS_NON_ROOT settings
+_nano_poudriere_conf() {
+	local conf="${NANO_POUDRIERE_CONF}"
+
+	if [ ! -f "${conf}" ]; then
+		if [ -f "${conf}.sample" ]; then
+			cp "${conf}.sample" "${conf}"
+		else
+			touch "${conf}"
+		fi
+	fi
+
+	# Set/replace ZPOOL line
+	if grep -q '^#\{0,1\}ZPOOL=' "${conf}" 2>/dev/null; then
+		sed -i '' "s|^#\{0,1\}ZPOOL=.*|ZPOOL=${NANO_POUDRIERE_ZPOOL}|" "${conf}"
+	else
+		echo "ZPOOL=${NANO_POUDRIERE_ZPOOL}" >> "${conf}"
+	fi
+
+	# Set/replace BUILD_AS_NON_ROOT line
+	if grep -q '^#\{0,1\}BUILD_AS_NON_ROOT=' "${conf}" 2>/dev/null; then
+		sed -i '' 's|^#\{0,1\}BUILD_AS_NON_ROOT=.*|BUILD_AS_NON_ROOT=no|' "${conf}"
+	else
+		echo "BUILD_AS_NON_ROOT=no" >> "${conf}"
+	fi
+}
+
+# Build ports packages via Poudriere using NANO_WORLDDIR as the null-mounted jail base.  
+_nano_poudriere_build() {
+	if ! command -v poudriere > /dev/null 2>&1; then
+		err "poudriere not found; install ports-mgmt/poudriere-devel"
+	fi
+	if [ ! -f "${NANO_PKGLIST}" ]; then
+		err "NANO_PKGLIST=${NANO_PKGLIST} not found"
+	fi
+	if [ -z "${NANO_POUDRIERE_ZPOOL}" ]; then
+		err "NANO_POUDRIERE_ZPOOL must be set for Poudriere build"
+	fi
+
+	pprint 2 "poudriere: configure ${NANO_POUDRIERE_CONF}"
+	_nano_poudriere_conf
+
+	mkdir -p /usr/ports/distfiles
+
+	# Derive the OS release string from the installed world
+	local _ver
+	_ver=$(chroot ${NANO_WORLDDIR} /bin/freebsd-version -u 2>/dev/null || uname -r)
+
+	# Create poudriere jail (null-mounted from NANO_WORLDDIR)
+	if poudriere jail -l -q 2>/dev/null | awk '{print $1}' | grep -qx "${NANO_POUDRIERE_JAIL}"; then
+		pprint 2 "poudriere jail ${NANO_POUDRIERE_JAIL} already exists, skipping creation"
+	else
+		pprint 2 "poudriere: create jail ${NANO_POUDRIERE_JAIL} from ${NANO_WORLDDIR} (${_ver})"
+		poudriere jail -c \
+		    -j "${NANO_POUDRIERE_JAIL}" \
+		    -M "${NANO_WORLDDIR}" \
+		    -m null \
+		    -v "${_ver}"
+	fi
+
+	# Create ports tree
+	if poudriere ports -l -q 2>/dev/null | awk '{print $1}' | grep -qx "${NANO_POUDRIERE_PORTS}"; then
+		pprint 2 "poudriere ports tree ${NANO_POUDRIERE_PORTS} already exists, skipping creation"
+	else
+		pprint 2 "poudriere: create ports tree ${NANO_POUDRIERE_PORTS}"
+		poudriere ports -c \
+		    -U "${NANO_POUDRIERE_PORTS_URL}" \
+		    -B "${NANO_POUDRIERE_PORTS_BRANCH}" \
+		    -p "${NANO_POUDRIERE_PORTS}"
+	fi
+
+	# Build packages
+	pprint 2 "poudriere: bulk build from ${NANO_PKGLIST}"
+	poudriere bulk \
+	    -j "${NANO_POUDRIERE_JAIL}" \
+	    -b "${NANO_POUDRIERE_PORTS}" \
+	    -p "${NANO_POUDRIERE_PORTS}" \
+	    -f "${NANO_PKGLIST}"
+
+	NANO_PACKAGE_DIR="${NANO_POUDRIERE_DATA}/packages/${NANO_POUDRIERE_JAIL}-${NANO_POUDRIERE_PORTS}/All"
+	pprint 2 "poudriere: packages in ${NANO_PACKAGE_DIR}"
+}
+
+#######################################################################
 # Install packages from ${NANO_PACKAGE_DIR}
 
 #
 # Bootstrap pkg and install all packages from NANO_PACKAGE_DIR
-# into NANO_WORLDDIR via a nullfs-mounted chroot
+# into NANO_WORLDDIR
 #
 cust_pkgng() {
-	if ! $do_root && [ -n "$NANO_NOPRIV_BUILD" ]; then
-		pprint 2 'Skipping "cust_pkgng" (unprivileged builds not supported yet)'
-		return 0
+	if [ -n "${NANO_PKGLIST}" ]; then
+		if ! $do_root; then
+			# Skip Poudriere if packages already exist in NANO_PACKAGE_DIR
+			# Error only when the directory is absent or empty.
+			local _pkgfound=false
+			for _f in "${NANO_PACKAGE_DIR}"/*.pkg "${NANO_PACKAGE_DIR}"/*.txz; do
+				[ -f "$_f" ] && _pkgfound=true && break
+			done
+			if [ ! -d "${NANO_PACKAGE_DIR}" ] || ! $_pkgfound; then
+				err "cust_pkgng: NANO_PKGLIST set but no packages found" \
+				    " in NANO_PACKAGE_DIR=${NANO_PACKAGE_DIR}." \
+				    " Pre-build with Poudriere (root) and set NANO_PACKAGE_DIR."
+			fi
+			pprint 2 "cust_pkgng (nopriv): using pre-built packages in ${NANO_PACKAGE_DIR}"
+		else
+			_nano_poudriere_build
+		fi
 	fi
 
-	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
-	local PKG_CONF="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
-	local PKGCMD="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"
-
-	# Ensure pkg.conf points pkg to where the package meta data lives
-	touch ${PKG_CONF}
-	if grep -Eiq '^PKG_DBDIR:.*' ${PKG_CONF}; then
-		sed -i -e "\|^PKG_DBDIR:.*|Is||PKG_DBDIR: "\"${NANO_PKG_META_BASE}/pkg\""|" ${PKG_CONF}
-	else
-		echo "PKG_DBDIR: \"${NANO_PKG_META_BASE}/pkg\"" >> ${PKG_CONF}
-	fi
-
-	# If the package directory doesn't exist, we're done
 	NANO_PACKAGE_DIR="$(realpath $NANO_PACKAGE_DIR)"
 	if [ ! -d ${NANO_PACKAGE_DIR} ]; then
 		echo "DONE 0 packages"
 		return 0
+	fi
+
+	if $do_root; then
+		_cust_pkgng_priv
+	else
+		_cust_pkgng_nopriv
+	fi
+}
+
+# Privileged path:  nullfs + devfs mount, chroot + pkg add
+_cust_pkgng_priv() {
+	local pkg_conf pkgcmd _pkgs _pkg todo
+	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
+	pkg_conf="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
+	pkgcmd="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"
+
+	# Ensure pkg.conf points pkg to where the package meta data lives
+	touch ${pkg_conf}
+	if grep -Eiq '^PKG_DBDIR:.*' ${pkg_conf}; then
+		sed -i -e "\|^PKG_DBDIR:.*|Is||PKG_DBDIR: "\"${NANO_PKG_META_BASE}/pkg\""|" ${pkg_conf}
+	else
+		echo "PKG_DBDIR: \"${NANO_PKG_META_BASE}/pkg\"" >> ${pkg_conf}
 	fi
 
 	# Find a pkg-* package
@@ -1873,31 +1991,96 @@ cust_pkgng() {
 	trap "nano_umount ${NANO_WORLDDIR}/dev; nano_umount ${NANO_WORLDDIR}/_.p ; rm -xrf ${NANO_WORLDDIR}/_.p" 1 2 15 EXIT
 
 	# Install pkg-* package
-	CR "${PKGCMD} add /_.p/${_NANO_PKG_PACKAGE}"
+	CR "${pkgcmd} add /_.p/${_NANO_PKG_PACKAGE}"
 
 	(
 		# Expand any glob characters in package list
 		cd "${NANO_PACKAGE_DIR}"
-		_PKGS=$(find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort -u)
+		_pkgs=$(find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort -u)
 
 		# Show todo
-		todo=$(echo "$_PKGS" | wc -l)
+		todo=$(echo "$_pkgs" | wc -l)
 		echo "=== TODO: $todo"
-		echo "$_PKGS"
+		echo "$_pkgs"
 		echo "==="
 
 		# Install packages
-		for _PKG in $_PKGS; do
-			CR "${PKGCMD} add /_.p/${_PKG}"
+		for _pkg in $_pkgs; do
+			CR "${pkgcmd} add /_.p/${_pkg}"
 		done
 	)
 
-	CR0 "${PKGCMD} info"
+	CR0 "${pkgcmd} info"
 
 	trap - 1 2 15 EXIT
 	nano_umount ${NANO_WORLDDIR}/dev
 	nano_umount ${NANO_WORLDDIR}/_.p
 	rm -xrf ${NANO_WORLDDIR}/_.p
+}
+
+#
+# Unprivileged path: pkg -r WORLDDIR -o INSTALL_AS_USER=yes install
+#   - Requires NANO_PACKAGE_DIR to point to poudriere (root) pre-built packages
+#
+_cust_pkgng_nopriv() {
+	local _pkgs _pkg _names _name
+
+	mkdir -p "${NANO_WORLDDIR}/${NANO_PKG_META_BASE}/pkg"
+
+	# Collect package files matching NANO_PACKAGE_LIST glob
+	_pkgs=$(cd "${NANO_PACKAGE_DIR}" && \
+	    find ${NANO_PACKAGE_LIST} \( -name '*.pkg' -o -name '*.txz' \) \
+	    2>/dev/null | sort -u)
+
+	if [ -z "${_pkgs}" ]; then
+		echo "DONE 0 packages"
+		return 0
+	fi
+
+	echo "=== TODO: $(echo "$_pkgs" | wc -l | tr -d ' ') packages ==="
+	echo "$_pkgs"
+	echo "==="
+
+	# pkg add requires root unconditionally, INSTALL_AS_USER is only
+	# honoured by pkg install, hence using pkg install
+	local _repodir="${NANO_OBJ}/_.ports-repo"
+	pprint 2 "cust_pkgng (nopriv): building local repo index in ${_repodir}"
+	rm -rf "${_repodir}"
+	mkdir -p "${_repodir}"
+	# Symlink packages into writable dir so pkg repo can write its index there
+	for _pkg in $_pkgs; do
+		ln -sf "${NANO_PACKAGE_DIR}/${_pkg}" "${_repodir}/${_pkg}"
+	done
+	pkg repo "${_repodir}"
+
+	cat > "$(nano_pkg_repos_dir)/ports-local.conf" <<EOF
+ports-local: {
+  url: "file://${_repodir}",
+  signature_type: "none",
+  enabled: yes
+}
+EOF
+
+	tgt_pkg update -r ports-local
+
+	# Resolve package names from the .pkg files
+	_names=""
+	for _pkg in $_pkgs; do
+		_name=$(pkg query -F "${_repodir}/${_pkg}" '%n' 2>/dev/null) \
+		    || continue
+		_names="${_names} ${_name}"
+	done
+
+	if [ -z "${_names}" ]; then
+		echo "DONE 0 packages (failed to resolve names)"
+		return 0
+	fi
+
+	tgt_pkg install -r ports-local -I -U ${_names}
+
+	tgt_pkg info
+
+	rm -rf "${NANO_WORLDDIR}/var/db/pkg/triggers"
 }
 
 #######################################################################
