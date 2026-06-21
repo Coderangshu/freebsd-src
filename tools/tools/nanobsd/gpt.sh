@@ -464,7 +464,7 @@ create_code_partition() {
 	pprint 3 "log: ${NANO_OBJ}/_.cp"
 
 	(
-	local IMG code_sects
+	local IMG code_sects img_bytes part_bytes
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
@@ -472,6 +472,13 @@ create_code_partition() {
 	echo "Writing code image..."
 	nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 	    "$NANO_METALOG" "$code_sects" "$IMG" "$NANO_WORLDDIR"
+
+	img_bytes=$(stat -f %z "$IMG")
+	part_bytes=$(( code_sects * NANO_SECTOR_SIZE ))
+	if [ "${img_bytes}" -gt "${part_bytes}" ]; then
+		err "ERROR: code image (${img_bytes} bytes) exceeds partition" \
+		    "(${part_bytes} bytes). Increase NANO_MEDIASIZE or set NANO_CODESIZE."
+	fi
 	) > "${NANO_OBJ}/_.cp" 2>&1
 }
 
@@ -488,6 +495,7 @@ create_diskimage() {
 	local IMG code_sects code_size
 	local bootcode cfg data efiboot0 efiboot1 efiboot2 gptboot0 swap0
 	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" code3 "${NANO_BACKUP}"
+	local code1_img code1_bytes
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
@@ -581,6 +589,16 @@ create_diskimage() {
 		populate_data_part "${NANO_OBJ}/_.data.image" \
 		    "$NANO_DATADIR" "$NANO_PARTITION_DATA" "$DATA_SIZE" \
 		    "$NANO_METALOG_DATA"
+	fi
+
+	# Verify code image fits in partition before handing off to mkimg.
+	code1_img="${NANO_DISKIMGDIR}/${NANO_IMG1NAME}"
+	if [ -f "${code1_img}" ]; then
+		code1_bytes=$(stat -f %z "${code1_img}")
+		if [ "${code1_bytes}" -gt "${code_size}" ]; then
+			err "ERROR: code image (${code1_bytes} bytes) exceeds partition" \
+			    "(${code_size} bytes). Increase NANO_MEDIASIZE or set NANO_CODESIZE."
+		fi
 	fi
 
 	echo "Writing out ${NANO_IMGNAME}..."
