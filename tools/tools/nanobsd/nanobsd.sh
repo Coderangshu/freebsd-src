@@ -243,7 +243,7 @@ fi
 
 if $do_installworld; then
 	clean_world
-	if $do_precompiled; then
+	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
 		install_precompiled_world
 	else
 		make_conf_install
@@ -261,7 +261,7 @@ if ${do_prep_image}; then
 	setup_nanobsd_etc
 fi
 if $do_installkernel; then
-	if $do_precompiled; then
+	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
 		install_precompiled_kernel
 	else
 		install_kernel

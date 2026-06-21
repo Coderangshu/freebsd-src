@@ -610,9 +610,14 @@ tgt_pkg_chroot() {
 	pkg_cmd --chroot "$NANO_WORLDDIR" "$@"
 }
 
-# Return the directory used to cache downloaded packages
-nano_pkg_cachedir() {
+# Return the ABI-level parent of nano_pkg_cachedir
+nano_pkg_repo_basedir() {
 	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
+}
+
+# Return the directory used to cache packages (downloaded or local pkgs)
+nano_pkg_cachedir() {
+	echo "$(nano_pkg_repo_basedir)/latest"
 }
 
 # Copy FreeBSD pkg signing key fingerprints from the source tree
@@ -654,7 +659,7 @@ EOF
 # XXXJL FINGERPRINTS!
 	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
 FreeBSD-local: {
-  url: "file://$(nano_pkg_cachedir)",
+  url: "file://$(nano_pkg_repo_basedir)",
   enabled: no
 }
 EOF
@@ -663,7 +668,7 @@ EOF
 # XXXJL check with ashish/jrm if it is OK to clobber the cachedir like this
 # XXXJL add support for local FINGERPRINTS
 nano_pkg_repo() {
-	pkg_cmd repo "$(nano_pkg_cachedir)"
+	pkg_cmd repo "$(nano_pkg_repo_basedir)"
 }
 
 nano_pkg_disable_repos() {
@@ -722,6 +727,29 @@ nano_fetch_pkgbase_packages() {
 	else
 		pprint 2 "Using existing packages (as instructed)"
 	fi
+	) > "${NANO_LOG}/_.pkgbase" 2>&1
+}
+
+# Prepare the local pkg repository for a source pkgbase build
+nano_setup_local_pkg_repo() {
+	pprint 2 "configure local pkg repo"
+	pprint 3 "log: ${NANO_LOG}/_.pkgbase"
+
+	if [ ! -d "$NANO_LOG" ]; then
+		mkdir -p "$NANO_LOG"
+	fi
+
+	(
+	if [ ! -d "$(nano_pkg_cachedir)" ]; then
+		err "No locally built packages in $(nano_pkg_cachedir). Run without -b, or ensure a prior build populated the cache."
+	fi
+	nano_pkg_freebsd_repo_keys
+	nano_pkg_repo_conf
+	# pkg(8) is not part of pkgbase; fetch it from the online ports repo
+	# into the cache dir (PKG_CACHEDIR) so FreeBSD-local can serve it
+	tgt_pkg update -r FreeBSD-ports
+	tgt_pkg fetch -d -r FreeBSD-ports pkg
+	nano_pkg_repo
 	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
@@ -979,6 +1007,31 @@ build_kernel() {
 	) > ${MAKEOBJDIRPREFIX}/_.bk 2>&1
 }
 
+# Build pkgbase packages from the source tree via "make packages"
+build_packages() {
+	pprint 2 "build packages"
+	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bp"
+
+	local _cachedir
+	_cachedir="$(nano_pkg_cachedir)"
+	if [ -d "${_cachedir}" ] && \
+	    [ -n "$(ls "${_cachedir}"/*.pkg 2>/dev/null)" ]; then
+		pprint 2 "pkgbase cache present at ${_cachedir}, skipping make packages"
+		return 0
+	fi
+
+	if [ ! -f "${NANO_MAKE_CONF_BUILD}" ]; then
+		make_conf_build
+	fi
+
+	(
+	nano_make_build_env
+	set -o xtrace
+	cd "${NANO_SRC}"
+	${NANO_PMAKE} packages REPODIR="${NANO_OBJ}/_.cache"
+	) > ${MAKEOBJDIRPREFIX}/_.bp 2>&1
+}
+
 # Remove and recreate NANO_OBJ or just NANO_WORLDDIR
 clean_world() {
 	if [ "${NANO_OBJ}" != "${MAKEOBJDIRPREFIX}" ]; then
@@ -1218,7 +1271,7 @@ fixup_before_diskimage() {
 	if [ -n "${NANO_METALOG}" ]; then
 		pprint 2 "Fixing metalog"
 
-		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		if [ -z "$NANO_NOPKGBASE" ]; then
 			_xxx_pkg_metalog
 			_xxx_run_pkg_scripts
 		fi
@@ -1229,7 +1282,7 @@ fixup_before_diskimage() {
 		    sort -u | mtree -C -K uname,gname,tags -R size,time >> ${NANO_METALOG}
 	fi
 
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+	if [ -z "$NANO_NOPKGBASE" ]; then
 		_xxx_fix_pkg_permissions
 		tgt_pkg_time_timestamp
 		_xxx_pkg_db_dump_or_vacuum
