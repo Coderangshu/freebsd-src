@@ -166,6 +166,28 @@ tgt_write_fstab() {
 	fi
 
 	tgt_touch etc/fstab
+
+	if [ -f "${NANO_TOOLS}/default/Files/etc/rc.d/gptboot" ]; then
+		install -m 755 "${NANO_TOOLS}/default/Files/etc/rc.d/gptboot" \
+		    etc/rc.d/gptboot
+		tgt_touch etc/rc.d/gptboot
+		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+			tgt_pkg_update_file_sha256 etc/rc.d/gptboot
+		fi
+	fi
+
+	# Protect immutable partitions (mode 0440 blocks non-root writes):
+	#   efiboot0       - recovery ESP carrying gptboot.efi, written once
+	#   ${NANO_BACKUP} - permanent golden root, never updated
+	if is_boot_type UEFI; then
+		printf 'perm\tgpt/efiboot0\t0440\n' >> etc/devfs.conf
+	fi
+	if [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		printf 'perm\tgpt/%s\t0440\n' "${NANO_BACKUP}" >> etc/devfs.conf
+	fi
+	if is_boot_type UEFI || [ "${NANO_BACKUP_PART:-0}" -eq 1 ]; then
+		tgt_touch etc/devfs.conf
+	fi
 	)
 }
 

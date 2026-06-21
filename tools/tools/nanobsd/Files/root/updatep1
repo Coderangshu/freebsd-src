@@ -25,7 +25,7 @@
 # SUCH DAMAGE.
 #
 #
-# Script to update partition 1 on a NanoBSD system.
+# Script to update partition 1 on a NanoBSD MBR system.
 #
 # usage:
 #	ssh somewhere cat image.s1 | sh updatep1
@@ -51,3 +51,4 @@ dd of=/dev/${NANO_DRIVE}s1 obs=64k
 fsck_ffs -n /dev/${NANO_DRIVE}s1a
 
 gpart set -a active -i 1 ${NANO_DRIVE}
+boot0cfg -s 1 ${NANO_DRIVE}

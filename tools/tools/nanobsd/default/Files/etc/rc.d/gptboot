@@ -1,0 +1,181 @@
+#!/bin/sh
+#
+# Copyright (c) 2026
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHORS AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+#
+# NanoBSD version of /etc/rc.d/gptboot.  In addition to the stock
+# success/failure reporting, after a successful boot it confirms the
+# current A/B root partition as the permanent boot default:
+# bootonce/bootfailed are cleared and bootme is set on the partition the
+# system booted from, while bootme is removed from the other A/B
+# partition.  The golden backup partition C (NANO_PART_BACKUP_IDX) is
+# never modified, so its permanent bootme keeps working as the fallback.
+# Partition indices come from /etc/nanobsd.conf, written at image build
+# time by setup_nanobsd_write_confs() in default.sh.
+#
+
+# PROVIDE: gptboot
+# REQUIRE: mountcritremote
+# KEYWORD: nojail
+
+. /etc/rc.subr
+[ -r /etc/nanobsd.conf ] && . /etc/nanobsd.conf
+
+name="gptboot"
+rcvar="gptboot_enable"
+start_cmd="gptboot_start"
+
+gptboot_report()
+{
+	gpart show | \
+		egrep '(^=>| freebsd-ufs .*(\[|,)(bootfailed|bootonce)(,|\]))' | \
+		sed 's/^=>//' | \
+		egrep -v '(\[|,)bootme(,|\])' | \
+	while read start size pos type attrs rest; do
+		case "${pos}" in
+		[0-9]*)
+			if [ -n "${disk}" ]; then
+				part="${disk}p${pos}"
+				echo "${attrs}" | egrep -q '(\[|,)bootfailed(,|\])'
+				bootfailed=$?
+				echo "${attrs}" | egrep -q '(\[|,)bootonce(,|\])'
+				bootonce=$?
+				if [ ${bootfailed} -eq 0 ]; then
+					logger -t gptboot -p local0.notice "Boot from ${part} failed."
+					gpart unset -a bootfailed -i ${pos} ${disk} >/dev/null
+				elif [ ${bootonce} -eq 0 ]; then
+					# We want to log success after all failures.
+					echo -n "Boot from ${part} succeeded."
+					gpart unset -a bootonce -i ${pos} ${disk} >/dev/null
+				fi
+			fi
+			;;
+		*)
+			if [ "${type}" = "GPT" ]; then
+				disk="${pos}"
+			else
+				disk=""
+			fi
+			;;
+		esac
+	done | logger -t gptboot -p local0.notice
+}
+
+gptboot_confirm()
+{
+	local cur_dev component disk cur_idx other_idx
+
+	# MBR/legacy images share this file but have no GPT root set.
+	if [ -z "${NANO_PART_ROOT_IDX}" ] || \
+	   [ -z "${NANO_PART_ALTROOT_IDX}" ]; then
+		return 0
+	fi
+
+	cur_dev=$(mount | awk '$3 == "/" { print $1; exit }')
+	if [ -z "${cur_dev}" ]; then
+		warn "${name}: cannot determine current root device"
+		return 1
+	fi
+
+	case "${cur_dev}" in
+	/dev/gpt/*|/dev/gptid/*|/dev/label/*)
+		component=$(glabel status | awk -v lbl="${cur_dev#/dev/}" \
+		    '$1 == lbl { print $3; exit }')
+		if [ -z "${component}" ]; then
+			warn "${name}: cannot find component for ${cur_dev}"
+			return 1
+		fi
+		;;
+	/dev/*p[0-9]*)
+		component=${cur_dev#/dev/}
+		;;
+	*)
+		warn "${name}: root device ${cur_dev} is not a GPT partition"
+		return 1
+		;;
+	esac
+
+	disk=${component%p*}
+	cur_idx=${component##*p}
+	if [ -z "${disk}" ] || [ -z "${cur_idx}" ] ||
+	    [ "${disk}" = "${component}" ]; then
+		warn "${name}: cannot parse disk/index from ${component}"
+		return 1
+	fi
+
+	# C (BACKUP_IDX) is the permanent golden fallback — already has
+	# bootme set at image creation time.  If we boot into it, do
+	# nothing: stay on C until the operator runs updatep1 or updatep2
+	# to move back to A or B.
+	if [ -n "${NANO_PART_BACKUP_IDX}" ] && \
+	   [ "${cur_idx}" -eq "${NANO_PART_BACKUP_IDX}" ]; then
+		logger -t gptboot -p local0.notice \
+		    "Booted from golden partition ${component}," \
+		    "boot attributes unchanged."
+		return 0
+	fi
+
+	# Map current A/B partition index to the other A/B index
+	if [ "${cur_idx}" -eq "${NANO_PART_ROOT_IDX}" ]; then
+		other_idx=${NANO_PART_ALTROOT_IDX}
+	elif [ "${cur_idx}" -eq "${NANO_PART_ALTROOT_IDX}" ]; then
+		other_idx=${NANO_PART_ROOT_IDX}
+	else
+		warn "${name}: partition ${cur_idx} not in root set" \
+		    "(root=${NANO_PART_ROOT_IDX} alt=${NANO_PART_ALTROOT_IDX})"
+		return 1
+	fi
+
+	# Confirm current A/B partition as permanent default
+	gpart unset -a bootonce -i ${cur_idx} ${disk} >/dev/null 2>&1
+	gpart unset -a bootfailed -i ${cur_idx} ${disk} >/dev/null 2>&1
+	if gpart set -a bootme -i ${cur_idx} ${disk} >/dev/null 2>&1; then
+		logger -t gptboot -p local0.notice \
+		    "${component} confirmed as permanent boot default."
+	else
+		warn "${name}: cannot set bootme on ${component}"
+		return 1
+	fi
+
+	# Clear bootme from the other A/B slot; C's bootme is never touched.
+	gpart unset -a bootme -i ${other_idx} ${disk} >/dev/null 2>&1
+	return 0
+}
+
+gptboot_start()
+{
+	gptboot_report
+	if checkyesno gptboot_confirm_enable; then
+		gptboot_confirm
+	fi
+}
+
+load_rc_config $name
+
+: ${gptboot_confirm_enable:="YES"}
+
+# doesn't make sense to run in a svcj: config setting
+gptboot_svcj="NO"
+
+run_rc_command "$1"
