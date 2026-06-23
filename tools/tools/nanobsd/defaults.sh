@@ -710,11 +710,12 @@ nano_fetch_pkgbase_packages() {
 
 	if $do_clean; then
 		rm -rf "${NANO_OBJ}/_.cache"
+		rm -rf "${NANO_WORLDDIR}/var/db/pkg"
 		mkdir -p "$(nano_pkg_cachedir)"
 		nano_pkg_freebsd_repo_keys
 		nano_pkg_repo_conf
 		tgt_pkg update
-		tgt_pkg fetch -d $(nano_pkgbase_list)
+		tgt_pkg install -F $(nano_pkgbase_list)
 		nano_pkg_repo
 	else
 		pprint 2 "Using existing packages (as instructed)"
