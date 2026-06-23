@@ -256,7 +256,7 @@ _xxx_tgt_pkg_triggers() {
 			makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
 			metalog_add_data "./${mandir}/mandoc.db"
 		done
-		rm -f "${NANO_WORLDDIR}/var/db/triggers/*"
+		find "${NANO_WORLDDIR}/var/db/pkg/triggers" -type f -delete
 	else
 		tgt_pkg_chroot triggers
 	fi
