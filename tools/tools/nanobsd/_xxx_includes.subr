@@ -84,8 +84,10 @@ metalog_add_data() {
 		err "metalog_add_data: ${entry} not found"
 	fi
 	metalog=${3:-$NANO_METALOG}
-	printf "%s type=%s uname=%s gname=%s mode=%s\n" \
-	    "$entry" "$type" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" >> "$metalog"
+	if [ -n "$metalog" ]; then
+		printf "%s type=%s uname=%s gname=%s mode=%s\n" \
+		    "$entry" "$type" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" >> "$metalog"
+	fi
 }
 
 #
