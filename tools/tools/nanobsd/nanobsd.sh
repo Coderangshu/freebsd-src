@@ -222,14 +222,21 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
-if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-	nano_fetch_pkgbase_packages
-	if ! $do_root; then
+if ! $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+	build_packages
+	nano_setup_local_pkg_repo
+fi
+
+if [ -z "$NANO_NOPKGBASE" ]; then
+	if $do_precompiled; then
+		nano_fetch_pkgbase_packages
+	fi
+	if [ -n "${NANO_NOPRIV_BUILD}" ]; then
 		nano_pkgbase_reset_metalog
 	fi
 else
 	nano_fetch_distsets
-	if ! $do_root; then
+	if [ -n "${NANO_NOPRIV_BUILD}" ]; then
 		nano_distset_metalog
 	fi
 fi
