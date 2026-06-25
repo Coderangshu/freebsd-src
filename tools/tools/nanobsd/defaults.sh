@@ -72,7 +72,7 @@ NANO_MAKE="make"
 NANO_NCPU=$(sysctl -n hw.ncpu)
 
 # The default name for any image we create
-NANO_IMGNAME="_.disk.full"
+NANO_IMGNAME="_.disk.${NANO_NAME}"
 NANO_IMG1NAME="_.disk.image"
 
 # Options to put in make.conf during buildworld only
