@@ -610,14 +610,9 @@ tgt_pkg_chroot() {
 	pkg_cmd --chroot "$NANO_WORLDDIR" "$@"
 }
 
-# Return the ABI-level parent of nano_pkg_cachedir
-nano_pkg_repo_basedir() {
-	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
-}
-
 # Return the directory used to cache packages (downloaded or local pkgs)
 nano_pkg_cachedir() {
-	echo "$(nano_pkg_repo_basedir)/latest"
+	echo "${NANO_OBJ}/_.cache/${NANO_ABI}/latest"
 }
 
 # Copy FreeBSD pkg signing key fingerprints from the source tree
@@ -659,7 +654,7 @@ EOF
 # XXXJL FINGERPRINTS!
 	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
 FreeBSD-local: {
-  url: "file://$(nano_pkg_repo_basedir)",
+  url: "file://$(nano_pkg_cachedir)",
   enabled: no
 }
 EOF
@@ -668,7 +663,7 @@ EOF
 # XXXJL check with ashish/jrm if it is OK to clobber the cachedir like this
 # XXXJL add support for local FINGERPRINTS
 nano_pkg_repo() {
-	pkg_cmd repo "$(nano_pkg_repo_basedir)"
+	pkg_cmd repo "$(realpath "$(nano_pkg_cachedir)")"
 }
 
 nano_pkg_disable_repos() {
@@ -1012,11 +1007,8 @@ build_packages() {
 	pprint 2 "build packages"
 	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bp"
 
-	local _cachedir
-	_cachedir="$(nano_pkg_cachedir)"
-	if [ -d "${_cachedir}" ] && \
-	    [ -n "$(ls "${_cachedir}"/*.pkg 2>/dev/null)" ]; then
-		pprint 2 "pkgbase cache present at ${_cachedir}, skipping make packages"
+	if ! $do_world; then
+		pprint 2 "Using existing packages (as instructed)"
 		return 0
 	fi
 
@@ -1028,7 +1020,11 @@ build_packages() {
 	nano_make_build_env
 	set -o xtrace
 	cd "${NANO_SRC}"
-	${NANO_PMAKE} packages REPODIR="${NANO_OBJ}/_.cache"
+	if $do_clean; then
+		${NANO_PMAKE} packages REPODIR="${NANO_OBJ}/_.cache"
+	else
+		${NANO_PMAKE} update-packages REPODIR="${NANO_OBJ}/_.cache"
+	fi
 	) > ${MAKEOBJDIRPREFIX}/_.bp 2>&1
 }
 
