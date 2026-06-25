@@ -148,7 +148,7 @@ NANO_DATASIZE=0
 NANO_RAM_ETCSIZE=10240
 
 # Size of the /tmp+/var ramdisk in 512 bytes sectors
-NANO_RAM_TMPVARSIZE=10240
+NANO_RAM_TMPVARSIZE=81920
 
 # Size of swap partition in 512 bytes sectors
 NANO_SWAP_SIZE=0

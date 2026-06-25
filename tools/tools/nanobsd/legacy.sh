@@ -67,6 +67,9 @@ NANO_ALTROOT=s2a
 NANO_BOOT0CFG="-o packet -s 1 -m 3"
 NANO_BOOTLOADER="boot/boot0sio"
 
+# Size of the /tmp+/var ramdisk in 512 bytes sectors
+NANO_RAM_TMPVARSIZE=10240
+
 #######################################################################
 # Functions and variable definitions used by the legacy nanobsd
 # image building system
