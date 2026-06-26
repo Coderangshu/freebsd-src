@@ -250,9 +250,17 @@ nano_distset_arch() {
 	esac
 }
 
+#
+# Build the local cache directory path shared by all cached artifacts 
+# for this revision/arch/branch (distsets, pkgbase packages)
+#
+nano_cache_dir() {
+	echo "${NANO_OBJ}/_.cache/$(nano_distset_reldir)/$(nano_distset_arch)/${NANO_REVISION}-${NANO_BRANCH}"
+}
+
 # Build the local cache directory path where distribution tarballs are stored
 nano_distset_dir() {
-	echo "${NANO_OBJ}/_.cache/$(nano_distset_reldir)/$(nano_distset_arch)/${NANO_REVISION}-${NANO_BRANCH}"
+	echo "$(nano_cache_dir)/dist"
 }
 
 #
@@ -294,7 +302,7 @@ nano_fetch_distsets() {
 	nano_distributions_contains " kernel.txz " || err "kernel.txz is mandatory"
 
 	if $do_clean; then
-		rm -rf "${NANO_OBJ}/_.cache"
+		rm -rf "$(nano_distset_dir)"
 	else
 		pprint 2 "Using existing distributions (as instructed)"
 	fi
@@ -375,7 +383,7 @@ patch_precompiled() {
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} /bin/sh ${fu_bin}"
 	fu_basedir="${NANO_WORLDDIR}"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} -b ${fu_basedir}"
-	fu_workdir="${NANO_OBJ}/_.cache/freebsd-update"
+	fu_workdir="$(nano_cache_dir)/freebsd-update"
 	mkdir -p "$fu_workdir"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} -d ${fu_workdir}"
 	FREEBSD_UPDATE="${FREEBSD_UPDATE} --currently-running ${NANO_REVISION}-${NANO_BRANCH}"
@@ -422,9 +430,9 @@ nano_distset_metalog() {
 # Use pkgbase.  If empty, pkgbase will be used
 NANO_NOPKGBASE=
 
-NANO_ABI=$(pkg config ABI)
-NANO_OSVERSION=$(pkg config OSVERSION)
-NANO_PKGBASE_DIR="base_latest"
+NANO_ABI=
+NANO_OSVERSION=
+NANO_PKGBASE_DIR=
 NANO_PORTS_DIR="latest"
 NANO_PKGBASE_LIST="FreeBSD-set-base FreeBSD-kernel-generic"
 
@@ -450,7 +458,7 @@ nano_pkgbase_list() {
 	target="$1"
 	list=""
 
-	[ "$target" = "world" ] || [ -z "$target" ] && list="pkg"
+	[ -z "$target" ] && list="pkg"
 
 	for package in $NANO_PKGBASE_LIST; do
 		case "$package" in
@@ -610,9 +618,12 @@ tgt_pkg_chroot() {
 	pkg_cmd --chroot "$NANO_WORLDDIR" "$@"
 }
 
+#
 # Return the directory used to cache packages (downloaded or local pkgs)
+# $1 = $NANO_PKGBASE_DIR or $NANO_PORTS_DIR; defaults to $NANO_PORTS_DIR
+#
 nano_pkg_cachedir() {
-	echo "${NANO_OBJ}/_.cache/${NANO_ABI}/latest"
+	echo "$(nano_cache_dir)/pkg/${1:-$NANO_PORTS_DIR}"
 }
 
 # Copy FreeBSD pkg signing key fingerprints from the source tree
@@ -633,28 +644,41 @@ nano_pkg_repos_dir() {
 # XXXJL try setting CONSERVATIVE_UPGRADE=no on the builder,
 # if it fails, we must set it explicitly in pkg_cmd
 nano_pkg_repo_conf() {
+	local _base_keys
+	case "${NANO_PKGBASE_DIR}" in
+	base_release_*)
+		_base_keys="/usr/share/keys/pkgbase-${NANO_REVISION%%.*}"
+		;;
+	*)
+		_base_keys="/usr/share/keys/pkg"
+		;;
+	esac
 	rm -rf "$(nano_pkg_repos_dir)"
 	mkdir -p "$(nano_pkg_repos_dir)"
 	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
 FreeBSD-ports: {
-  url: "pkg+https://pkg.freebsd.org/\${ABI}/${NANO_PORTS_DIR}",
+  url: "pkg+https://pkg.freebsd.org/${NANO_ABI}/${NANO_PORTS_DIR}",
   mirror_type: "srv",
   signature_type: "fingerprints",
   fingerprints: "/usr/share/keys/pkg",
   enabled: yes
 }
 FreeBSD-base: {
-  url: "pkg+https://pkg.freebsd.org/\${ABI}/${NANO_PKGBASE_DIR}",
+  url: "pkg+https://pkg.freebsd.org/${NANO_ABI}/${NANO_PKGBASE_DIR}",
   mirror_type: "srv",
   signature_type: "fingerprints",
-  fingerprints: "/usr/share/keys/pkg",
+  fingerprints: "${_base_keys}",
   enabled: yes
 }
 EOF
 # XXXJL FINGERPRINTS!
 	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
-FreeBSD-local: {
-  url: "file://$(nano_pkg_cachedir)",
+FreeBSD-local-base: {
+  url: "file://$(nano_pkg_cachedir "$NANO_PKGBASE_DIR")",
+  enabled: no
+}
+FreeBSD-local-ports: {
+  url: "file://$(nano_pkg_cachedir "$NANO_PORTS_DIR")",
   enabled: no
 }
 EOF
@@ -663,7 +687,7 @@ EOF
 # XXXJL check with ashish/jrm if it is OK to clobber the cachedir like this
 # XXXJL add support for local FINGERPRINTS
 nano_pkg_repo() {
-	pkg_cmd repo "$(realpath "$(nano_pkg_cachedir)")"
+	pkg_cmd repo "$(realpath "$(nano_pkg_cachedir "$1")")"
 }
 
 nano_pkg_disable_repos() {
@@ -711,14 +735,17 @@ nano_fetch_pkgbase_packages() {
 	    err "A FreeBSD-kernel package is mandatory"
 
 	if $do_clean; then
-		rm -rf "${NANO_OBJ}/_.cache"
+		rm -rf "$(nano_pkg_cachedir "$NANO_PKGBASE_DIR")"
 		rm -rf "${NANO_WORLDDIR}/var/db/pkg"
-		mkdir -p "$(nano_pkg_cachedir)"
+		mkdir -p "$(nano_pkg_cachedir "$NANO_PKGBASE_DIR")"
 		nano_pkg_freebsd_repo_keys
 		nano_pkg_repo_conf
 		tgt_pkg update
-		tgt_pkg install -F $(nano_pkgbase_list)
-		nano_pkg_repo
+		tgt_pkg -o PKG_CACHEDIR="$(nano_pkg_cachedir "$NANO_PKGBASE_DIR")" \
+		    install -F $(nano_pkgbase_list world) $(nano_pkgbase_list kernel)
+		nano_pkg_repo "$NANO_PKGBASE_DIR"
+		tgt_pkg fetch -d -r FreeBSD-ports pkg
+		nano_pkg_repo "$NANO_PORTS_DIR"
 	else
 		pprint 2 "Using existing packages (as instructed)"
 	fi
@@ -735,16 +762,14 @@ nano_setup_local_pkg_repo() {
 	fi
 
 	(
-	if [ ! -d "$(nano_pkg_cachedir)" ]; then
-		err "No locally built packages in $(nano_pkg_cachedir). Run without -b, or ensure a prior build populated the cache."
+	if [ ! -d "$(nano_pkg_cachedir "$NANO_PKGBASE_DIR")" ]; then
+		err "No locally built packages in $(nano_pkg_cachedir "$NANO_PKGBASE_DIR"). Run without -b, or ensure a prior build populated the cache."
 	fi
 	nano_pkg_freebsd_repo_keys
 	nano_pkg_repo_conf
-	# pkg(8) is not part of pkgbase; fetch it from the online ports repo
-	# into the cache dir (PKG_CACHEDIR) so FreeBSD-local can serve it
 	tgt_pkg update -r FreeBSD-ports
 	tgt_pkg fetch -d -r FreeBSD-ports pkg
-	nano_pkg_repo
+	nano_pkg_repo "$NANO_PORTS_DIR"
 	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
@@ -1007,7 +1032,7 @@ build_packages() {
 	pprint 2 "build packages"
 	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bp"
 
-	if ! $do_world; then
+	if ! $do_world && [ -d "$(nano_pkg_cachedir "$NANO_PKGBASE_DIR")" ]; then
 		pprint 2 "Using existing packages (as instructed)"
 		return 0
 	fi
@@ -1021,10 +1046,11 @@ build_packages() {
 	set -o xtrace
 	cd "${NANO_SRC}"
 	if $do_clean; then
-		${NANO_PMAKE} packages REPODIR="${NANO_OBJ}/_.cache"
+		${NANO_PMAKE} packages REPODIR="$(nano_cache_dir)/pkg"
 	else
-		${NANO_PMAKE} update-packages REPODIR="${NANO_OBJ}/_.cache"
+		${NANO_PMAKE} update-packages REPODIR="$(nano_cache_dir)/pkg"
 	fi
+	ln -sfn "${NANO_ABI}/${NANO_PORTS_DIR}" "$(nano_cache_dir)/pkg/${NANO_PKGBASE_DIR}"
 	) > ${MAKEOBJDIRPREFIX}/_.bp 2>&1
 }
 
@@ -1091,10 +1117,12 @@ install_precompiled_world() {
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		nano_pkg_freebsd_repo_keys
-		tgt_pkg update -r FreeBSD-local
+		tgt_pkg update -r FreeBSD-local-base
 		if [ -n "$(nano_pkgbase_world_list)" ]; then
-			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_world_list)
+			tgt_pkg install -r FreeBSD-local-base -U $(nano_pkgbase_world_list)
 		fi
+		tgt_pkg update -r FreeBSD-local-ports
+		tgt_pkg install -r FreeBSD-local-ports -U pkg
 		_xxx_tgt_pkg_triggers
 	else
 		for distset in $NANO_DISTRIBUTIONS; do
@@ -1165,7 +1193,7 @@ install_precompiled_kernel() {
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		if [ -n "$(nano_pkgbase_kernel_list)" ]; then
-			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_kernel_list)
+			tgt_pkg install -r FreeBSD-local-base -U $(nano_pkgbase_kernel_list)
 		fi
 	else
 		if [ -f "$(nano_distset_dir)/kernel.txz" ]; then
@@ -2096,6 +2124,16 @@ export_var() {
 
 # Call this function to set defaults _after_ parsing options
 set_defaults_and_export() {
+	: ${NANO_OSVERSION:=$(( ${NANO_REVISION%%.*} * 100000 ))}
+	: ${NANO_ABI:=FreeBSD:${NANO_REVISION%%.*}:${NANO_ARCH}}
+	if [ -z "${NANO_PKGBASE_DIR}" ]; then
+		if [ "${NANO_REVISION%%.*}" -ge 16 ]; then
+			NANO_PKGBASE_DIR="base_latest"
+		else
+			NANO_PKGBASE_DIR="base_release_${NANO_REVISION#*.}"
+		fi
+	fi
+
 	: ${NANO_OBJ:=/usr/obj/nanobsd.${NANO_NAME}${NANO_LAYOUT:+.${NANO_LAYOUT}}}
 	: ${MAKEOBJDIRPREFIX:=${NANO_OBJ}}
 	: ${NANO_DISKIMGDIR:=${NANO_OBJ}}
@@ -2114,6 +2152,12 @@ set_defaults_and_export() {
 	# Set a default NANO_TOOLS to NANO_SRC/NANO_TOOLS if it exists
 	[ ! -d "${NANO_TOOLS}" ] && [ -d "${NANO_SRC}/${NANO_TOOLS}" ] && \
 		NANO_TOOLS="${NANO_SRC}/${NANO_TOOLS}" || true
+
+	[ ! -d "${NANO_CUST_FILESDIR}" ] && [ -d "${NANO_SRC}/${NANO_CUST_FILESDIR}" ] && \
+		NANO_CUST_FILESDIR="${NANO_SRC}/${NANO_CUST_FILESDIR}" || true
+	[ -n "${NANO_CUST_FILES_MTREE}" ] && [ ! -f "${NANO_CUST_FILES_MTREE}" ] && \
+		[ -f "${NANO_SRC}/${NANO_CUST_FILES_MTREE}" ] && \
+		NANO_CUST_FILES_MTREE="${NANO_SRC}/${NANO_CUST_FILES_MTREE}" || true
 
 	if [ -n "${NANO_NOPRIV_BUILD}" ] && [ -z "${NANO_METALOG}" ]; then
 		NANO_METALOG=${NANO_OBJ}/_.metalog
