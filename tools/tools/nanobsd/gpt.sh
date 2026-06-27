@@ -35,9 +35,6 @@ NANO_PLAN=default
 #
 NANO_BOOT_TYPE="BIOS UEFI"
 
-# EFI System Partition size in 512 bytes sectors
-NANO_EFI_BOOTPART_SIZE=532480
-
 # Set NANO_LABEL to non-blank to form the basis for using /dev/gpt/code
 # in preference to /dev/${NANO_DRIVE}
 # Root partition will be /dev/gpt/${NANO_ROOT, NANO_ALTROOT}
@@ -161,7 +158,7 @@ make_esp_partition() {
 	FAT32MIN=34091008
 
 	esp_sects=$(awk -v label="$name" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
-	fat_size=$(strsuftoll "${esp_sects:-0}b")
+	fat_size=$(strtobytes "${esp_sects:-0}s")
 	if [ "$fat_size" -ge "$FAT32MIN" ]; then
 		fat_type=32
 	elif [ "$fat_size" -ge "$FAT16MIN" ]; then
@@ -207,22 +204,23 @@ make_esp_partition() {
 
 #
 # Calculate partition sizes aligned at 1 MiB boundaries.
-# All sizes are in sectors.
+# All sizes are in bytes.
 # The output is compatible with gpart restore
 #
 calculate_partitioning() {
 	local boot_sects boot_size boot_type esp_sects
 	boot_sects=0
+	boot_size=0
 	boot_type=0
 	esp_sects=0
 
 	if is_boot_type BIOS; then
 		boot_type=1
 		# Boot partition is exactly 512 KiB
-		boot_size=$(strsuftoll 512k)
+		boot_size=$(strtobytes 512KiB)
 		boot_sects=$(( boot_size / NANO_SECTOR_SIZE ))
 	fi
-	is_boot_type UEFI && esp_sects="$NANO_EFI_BOOTPART_SIZE"
+	is_boot_type UEFI && esp_sects=$(( NANO_EFI_BOOTPART_SIZE / NANO_SECTOR_SIZE ))
 
 	echo "$NANO_MEDIASIZE" "$NANO_IMAGES" "$NANO_SECTOR_SIZE" \
 	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
@@ -235,7 +233,7 @@ calculate_partitioning() {
 	function print_line(type, sects, label,   windex, wtype, wblocks) {
 		windex = 3
 		wtype = ($7 == 1 || swap_sects > 0) ? length("freebsd-swap") : length("freebsd-ufs")
-		wblocks = length($1)
+		wblocks = length(media_sects)
 
 		printf "%-*s %*s %*s %*s %s\n",
 		    windex, i,
@@ -252,12 +250,15 @@ calculate_partitioning() {
 		# Sector size
 		ssize = $3
 
+		# Media size in sectors
+		media_sects = int($1 / ssize)
+
 		# Align to a 1 MiB boundary in sectors
 		align = int((1024 * 1024) / ssize)
 
 		# GPT backup metadata at the end of the disk in sectors
 		# (128 entries x 128 bytes + 1 header sector)
-		gpt_end_sects = int(16384 / ssize) + 1
+		gpt_end_sects = int((128 * 128) / ssize) + 1
 
 		# Boot size in sectors (already rounded up)
 		boot_sects = ($8 > 0) ? $8 : 0
@@ -269,7 +270,7 @@ calculate_partitioning() {
 		swap_sects = ($10  > 0) ? roundup($10) : 0
 
 		# Configuration partition size in sectors (rounded up)
-		cfg_sects = roundup($5)
+		cfg_sects = roundup($5 / ssize)
 
 		# Data partition size in sectors (rounded up)
 		data_sects = ($6 > 0) ? roundup($6) : $6
@@ -278,7 +279,7 @@ calculate_partitioning() {
 		sstart = 40
 
 		# Available sectors
-		avail_sects = $1 - sstart - gpt_end_sects
+		avail_sects = media_sects - sstart - gpt_end_sects
 
 		# Print header (scheme and number of entries)
 		print "GPT 128"
@@ -305,7 +306,7 @@ calculate_partitioning() {
 		}
 
 		# Code partition size in sectors
-		code_sects = $4
+		code_sects = int($4 / ssize)
 		if (code_sects == 0) {
 			# (rounded down)
 			total_code_sects = avail_sects - cfg_sects - \
@@ -350,14 +351,15 @@ create_code_partition() {
 	pprint 3 "log: ${NANO_OBJ}/_.cp"
 
 	(
-	local IMG code_sects
+	local IMG code_sects code_size
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
+	code_size=$(( code_sects * NANO_SECTOR_SIZE ))
 
 	echo "Writing code image..."
 	nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
-	    "$NANO_METALOG" "$code_sects" "$IMG" "$NANO_WORLDDIR"
+	    "$NANO_METALOG" "$code_size" "$IMG" "$NANO_WORLDDIR"
 	) > "${NANO_OBJ}/_.cp" 2>&1
 }
 
@@ -430,7 +432,7 @@ create_diskimage() {
 			echo "Duplicating to second image..."
 			tgt_switch_root_fstab 1 2
 			nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
-			    "${NANO_METALOG}" "$code_sects" \
+			    "${NANO_METALOG}" "$code_size" \
 			    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" "${NANO_WORLDDIR}"
 			tgt_switch_root_fstab 2 1
 		else
@@ -453,7 +455,7 @@ create_diskimage() {
 
 	echo "Writing out ${NANO_IMGNAME}..."
 	mkimg -s gpt -S ${NANO_SECTOR_SIZE} \
-	    --capacity $(( NANO_MEDIASIZE * NANO_SECTOR_SIZE )) \
+	    --capacity ${NANO_MEDIASIZE} \
 	    ${bootcode} \
 	    ${gptboot0} \
 	    ${efiboot0} \

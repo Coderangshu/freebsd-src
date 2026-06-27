@@ -72,7 +72,7 @@ fi
 # We define our own imaging plan, so instruct nanobsd not to define its own.
 NANO_PLAN=embedded
 
-NANO_SLICE_FAT_SIZE=32m
+NANO_SLICE_FAT_SIZE=32mi
 NANO_SLICE_CFG_SIZE=32m
 
 NANO_BOOT2CFG="-h -S115200"
@@ -211,7 +211,7 @@ create_diskimage_mbr() {
 		FAT16MIN=2150400
 		FAT32MIN=34091008
 
-		fat_size=$(strsuftoll "$NANO_SLICE_FAT_SIZE")
+		fat_size=$(strtobytes "$NANO_SLICE_FAT_SIZE")
 		if [ "$fat_size" -ge "$FAT32MIN" ]; then
 			fat_type=32
 			fat_scheme=fat32lba

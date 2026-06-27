@@ -34,6 +34,7 @@ topdir=$(dirname ${nanobsd_sh})
 . "${topdir}/customizations.sh"
 . "${topdir}/_xxx_includes.subr" # XXX ideally, this file should not exist
 
+# XXXJL remove this function?
 is_defined() {
 	case $(type $1 2>/dev/null) in
 	*function) return 0 ;;
@@ -42,13 +43,19 @@ is_defined() {
 }
 
 legacy() {
-    # Pull in legacy stuff on demand
-    . "${topdir}/legacy.sh"
+	# Pull in legacy stuff on demand
+	. "${topdir}/legacy.sh"
+	NANO_PLAN="legacy"
 }
 
 default() {
-    # Pull in default stuff on demand
-    . "${topdir}/gpt.sh"
+	# Pull in default stuff on demand
+	if [ "$NANO_PARTITION_SCHEME" = "MBR" ]; then
+		. "${topdir}/mbr.sh"
+	else
+		. "${topdir}/gpt.sh"
+	fi
+	NANO_PLAN="${NANO_PLAN:-default}"
 }
 
 #######################################################################
