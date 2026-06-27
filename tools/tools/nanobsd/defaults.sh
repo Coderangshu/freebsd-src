@@ -162,13 +162,6 @@ NANO_SWAP_ENCRYPTION=
 # default force serial console
 NANO_BOOT2CFG="-h -S115200"
 
-# Backing type of md(4) device
-# Can be "file" or "swap"
-NANO_MD_BACKING="file"
-
-# for swap type md(4) backing, write out the mbr only
-NANO_IMAGE_MBRONLY=true
-
 # Progress Print level
 PPLEVEL=3
 

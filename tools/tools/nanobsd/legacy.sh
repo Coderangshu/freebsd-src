@@ -39,6 +39,13 @@ NANO_PLAN=legacy
 #
 METADATA_SECTS=16
 
+# Backing type of md(4) device
+# Can be "file" or "swap"
+NANO_MD_BACKING="file"
+
+# for swap type md(4) backing, write out the mbr only
+NANO_IMAGE_MBRONLY=true
+
 # Newfs parameters to use
 NANO_NEWFS="-b 4096 -f 512 -i 8192 -U"
 
