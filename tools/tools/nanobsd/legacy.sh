@@ -81,6 +81,122 @@ NANO_RAM_TMPVARSIZE=10240
 # Functions and variable definitions used by the legacy nanobsd
 # image building system
 
+#######################################################################
+# Common Flash device geometries
+#
+
+#
+# Source FlashDevice.sub and call sub_FlashDevice to set NANO_MEDIASIZE
+# and geometry vars for a named flash device
+# Input: $1 = flash device name, $2 = size variant
+#
+FlashDevice() {
+	if [ -d ${NANO_TOOLS} ]; then
+		. ${NANO_TOOLS}/FlashDevice.sub
+	else
+		. ${NANO_SRC}/${NANO_TOOLS}/FlashDevice.sub
+	fi
+	sub_FlashDevice $1 $2
+}
+
+#######################################################################
+# USB device geometries
+#
+# Usage:
+#	UsbDevice Generic 1000	# a generic flash key sold as having 1GB
+#
+# This function will set NANO_MEDIASIZE, NANO_HEADS and NANO_SECTS for you.
+#
+# Note that the capacity of a flash key is usually advertised in MB or
+# GB, *not* MiB/GiB. As such, the precise number of cylinders available
+# for C/H/S geometry may vary depending on the actual flash geometry.
+#
+# The following generic device layouts are understood:
+#  generic           An alias for generic-hdd.
+#  generic-hdd       255H 63S/T xxxxC with no MBR restrictions.
+#  generic-fdd       64H 32S/T xxxxC with no MBR restrictions.
+#
+# The generic-hdd device is preferred for flash devices larger than 1GB
+#
+
+#
+# Set NANO_HEADS, NANO_SECTS, and NANO_MEDIASIZE for a USB device based
+# on type (generic-fdd/generic-hdd) and advertised MB capacity
+# Input: $1 = device type string, $2 = size in MB
+#
+UsbDevice() {
+	local a1=$(echo $1 | tr '[:upper:]' '[:lower:]')
+	case $a1 in
+	generic-fdd)
+		NANO_HEADS=64
+		NANO_SECTS=32
+		NANO_MEDIASIZE=$(( $2 * 1000 * 1000 / 512 ))
+		;;
+	generic|generic-hdd)
+		NANO_HEADS=255
+		NANO_SECTS=63
+		NANO_MEDIASIZE=$(( $2 * 1000 * 1000 / 512 ))
+		;;
+	*)
+		err "Unknown USB flash device"
+		;;
+	esac
+}
+
+#
+# Create a new UFS filesystem on a block device with an optional label,
+# and mount it async
+# Input: $1 = device, $2 = mount point, $3 = label suffix
+#
+newfs_part() {
+	local dev mnt lbl
+	dev=$1
+	mnt=$2
+	lbl=$3
+	echo newfs ${NANO_NEWFS} ${NANO_LABEL:+-L${NANO_LABEL}${lbl}} ${dev}
+	newfs ${NANO_NEWFS} ${NANO_LABEL:+-L${NANO_LABEL}${lbl}} ${dev}
+	mount -o async ${dev} ${mnt}
+}
+
+#
+# Populate a slice from a source directory on a given device
+# Input: $1 = device, $2 = source dir (optional), $3 = mount point,
+# $4 = label suffix
+#
+populate_slice() {
+	local dev dir mnt lbl
+	dev=$1
+	dir=$2
+	mnt=$3
+	lbl=$4
+	echo "Creating ${dev} (mounting on ${mnt})"
+	newfs_part ${dev} ${mnt} ${lbl}
+	if [ -n "${dir}" -a -d "${dir}" ]; then
+		echo "Populating ${lbl} from ${dir}"
+		cd "${dir}"
+		find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
+		    cpio ${CPIO_SYMLINK} -dumpv ${mnt}
+	fi
+	df -i ${mnt}
+	nano_umount ${mnt}
+}
+
+#
+# Thin wrapper around populate_slice for the configuration slice
+# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
+#
+populate_cfg_slice() {
+	populate_slice "$1" "$2" "$3" "$4"
+}
+
+#
+# Thin wrapper around populate_slice for the data slice
+# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
+#
+populate_data_slice() {
+	populate_slice "$1" "$2" "$3" "$4"
+}
+
 # Note: we use the is_defined hack to catch most uses of function redefinition
 # in config files.  Older versions of FreeBSD defined these before configs were
 # included, but now we define it after to allow different NANO_PLAN...
