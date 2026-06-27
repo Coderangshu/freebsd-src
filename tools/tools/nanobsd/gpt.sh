@@ -27,7 +27,7 @@
 
 set -e
 
-NANO_PLAN=gpt
+NANO_PLAN=default
 
 #
 # Space-separated list of boot types; options: BIOS, UEFI (case-insensitive).

@@ -46,8 +46,8 @@ legacy() {
     . "${topdir}/legacy.sh"
 }
 
-gpt() {
-    # Pull in gpt stuff on demand
+default() {
+    # Pull in default stuff on demand
     . "${topdir}/gpt.sh"
 }
 
