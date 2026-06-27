@@ -77,7 +77,7 @@ tgt_write_fstab() {
 
 	printf_fstab "# Device" Mountpoint FStype Options Dump "Pass#"
 	if is_boot_type UEFI; then
-		printf_fstab "/dev/gpt/efiboot1" /boot/efi msdosfs rw,noauto 2 2
+		printf_fstab "/dev/gpt/efiboot0" /boot/efi msdosfs rw,noauto 2 2
 	fi
 	printf_fstab "/dev/gpt/${NANO_ROOT}" / ufs ro 1 1
 	printf_fstab /dev/gpt/${NANO_PARTITION_CFG} /cfg ufs rw,noauto 2 2
@@ -195,7 +195,6 @@ make_esp_partition() {
 		cp -p "$bootcode" "${espdir}/EFI/FreeBSD/loader.efi"
 	fi
 
-	# XXXJL missing metalog
 	makefs -t msdos \
 	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
@@ -298,19 +297,9 @@ calculate_partitioning() {
 		avail_sects -= (align - sstart)
 		sstart = align
 
-		# Recovery ESP (if any)
+		# ESP partition (if any)
 		if (esp_sects > 0) {
 			print_line("efi", esp_sects, "efiboot0")
-		}
-
-		# Primary ESP (if any)
-		if (esp_sects > 0) {
-			print_line("efi", esp_sects, "efiboot1")
-		}
-
-		# Secondary ESP (if any)
-		if (esp_sects > 0 && $2 > 1) {
-			print_line("efi", esp_sects, "efiboot2")
 		}
 
 		if (swap_sects > 0) {
@@ -385,7 +374,7 @@ create_diskimage() {
 
 	(
 	local IMG code_sects code_size
-	local bootcode cfg data efiboot0 efiboot1 efiboot2 gptboot0 swap0
+	local bootcode cfg data efiboot0 gptboot0 swap0
 	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}"
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
@@ -397,7 +386,7 @@ create_diskimage() {
 		bootcode="-b ${NANO_WORLDDIR}/boot/pmbr"
 	fi
 
-	for image in gptboot0 efiboot0 efiboot1 efiboot2 swap0 \
+	for image in gptboot0 efiboot0 swap0 \
 	    ${NANO_ROOT} ${NANO_ALTROOT} cfg data; do
 		match=$(awk -v dir="$NANO_OBJ" -v img="$image" -v ssize="$NANO_SECTOR_SIZE" \
 			'$5 == img {
@@ -427,11 +416,9 @@ create_diskimage() {
 		make_boot_partition "gptboot0"
 	fi
 
-	# Create recovery, primary and secondary ESPs (if any)
+	# Create ESP partition (if any)
 	if is_boot_type UEFI; then
 		make_esp_partition "efiboot0" "recovery"
-		make_esp_partition "efiboot1"
-		make_esp_partition "efiboot2"
 	fi
 
 	# Swap partition must be greater than 100 MiB
@@ -472,8 +459,6 @@ create_diskimage() {
 	    ${bootcode} \
 	    ${gptboot0} \
 	    ${efiboot0} \
-	    ${efiboot1} \
-	    ${efiboot2} \
 	    ${swap0} \
 	    ${code1} \
 	    ${code2} \
@@ -484,8 +469,6 @@ create_diskimage() {
 	# Cleanup
 	rm -f "${NANO_OBJ}/_.gptboot0.image" \
 	    "${NANO_OBJ}/_.efiboot0.image" \
-	    "${NANO_OBJ}/_.efiboot1.image" \
-	    "${NANO_OBJ}/_.efiboot2.image" \
 	    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" \
 	    "${NANO_OBJ}/_.cfg.image" \
 	    "${NANO_OBJ}/_.data.image" \

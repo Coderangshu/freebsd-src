@@ -1,7 +1,4 @@
 . type=dir uname=root gname=wheel mode=0755
-./etc type=dir uname=root gname=wheel mode=0755
-./etc/rc.d type=dir uname=root gname=wheel mode=0755
-./etc/rc.d/efiboot_init type=file uname=root gname=wheel mode=0555
 ./root type=dir uname=root gname=wheel mode=0750
 ./root/bin type=dir uname=root gname=wheel mode=0755
 ./root/bin/change_password type=file uname=root gname=wheel mode=0555
