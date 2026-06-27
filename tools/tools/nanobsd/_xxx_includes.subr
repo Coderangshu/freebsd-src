@@ -170,13 +170,14 @@ _xxx_fix_pkg_permissions() {
 
 #
 # Manually run triggers and package scripts
-# Ideally the scripts and triggers should have a @generate keyword that adds them
-# to the metalog
+# XXXJL do we need to manually run the scripts or just the triggers?
+# Ideally the package plist should have an @generates keyword that adds
+# generated files to the metalog:
 #
 _xxx_run_pkg_scripts() {
 	# Repopulate the passwd db
 	if [ -f "${NANO_WORLDDIR}/etc/master.passwd" ]; then
-		pwd_mkdb -d "${NANO_WORLDDIR}/etc" \
+		pwd_mkdb -i -p -d "${NANO_WORLDDIR}/etc" \
 		    "${NANO_WORLDDIR}/etc/master.passwd"
 		# Add the passwd db files to the metalog
 		metalog_add_data "./etc/login.conf.db"
@@ -190,22 +191,23 @@ _xxx_run_pkg_scripts() {
 	fi
 	# Repopulate the capabilities db
 	if [ -f "${NANO_WORLDDIR}/etc/login.conf" ]; then
-		cap_mkdb -f "${NANO_WORLDDIR}/etc/login.conf.db" \
-		    "${NANO_WORLDDIR}/etc/login.conf"
+		# XXXJL ENDIANNESS
+		cap_mkdb "${NANO_WORLDDIR}/etc/login.conf"
 		# Add the capabilities db to the metalog
 		metalog_add_data "./etc/login.conf.db"
 		metalog_add_data "./conf/base/etc/login.conf.db"
 	fi
 	# Repopulate the services db
 	if [ -f "${NANO_WORLDDIR}/etc/services" ]; then
+		# XXXJL ENDIANNESS
 		services_mkdb -q -o "${NANO_WORLDDIR}/var/db/services.db" \
 		    "${NANO_WORLDDIR}/etc/services"
 		# Add the services db to the metalog
 		metalog_add_data "./var/db/services.db"
 		metalog_add_data "./conf/base/var/db/services.db"
 	fi
-	# XXXJL certctl rehash
 	if [ -f "${NANO_WORLDDIR}/etc/ssl/cert.pem" ]; then
+		certctl -D "$NANO_WORLDDIR" -U -M "$NANO_METALOG" rehash
 		metalog_add_data "./etc/ssl/cert.pem" "0444"
 		metalog_add_data "./conf/base/etc/ssl/cert.pem" "0444"
 	fi

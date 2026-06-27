@@ -56,7 +56,6 @@ NANO_ALTROOT="${NANO_LABEL}${NANO_PARTITION_ALTROOT}"
 if [ -z "${NANO_LABEL}" ]; then
 	err "NANO_LABEL must be defined"
 fi
-NANO_DRIVE="gpt/${NANO_LABEL}" || true
 
 NANO_BOOTLOADER="boot/gptboot"
 
@@ -69,7 +68,7 @@ tgt_write_fstab() {
 	cd "$NANO_WORLDDIR"
 
 	# Save config file for scripts
-	echo "NANO_DRIVE=vtbd0" > etc/nanobsd.conf # XXXJL
+	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
 	echo "NANO_LABEL=${NANO_LABEL}" >> etc/nanobsd.conf
 	echo "NANO_ROOT=${NANO_ROOT}" >> etc/nanobsd.conf
 	echo "NANO_ALTROOT=${NANO_ALTROOT}" >> etc/nanobsd.conf
@@ -131,7 +130,7 @@ is_boot_type() {
 }
 
 #
-# Create a FreeBSD Boot Partition image file
+# Create a FreeBSD Boot Partition image file of 512 KiB
 # Input: $1 = label
 #
 make_boot_partition() {
@@ -143,7 +142,6 @@ make_boot_partition() {
 	if [ ! -f "$bootcode" ]; then
 		echo "Image will not be bootable"
 	else
-		# XXXJL missing metalog
 		cp -p "$bootcode" "${NANO_OBJ}/_.${name}.image"
 		truncate -s 512k "${NANO_OBJ}/_.${name}.image"
 	fi

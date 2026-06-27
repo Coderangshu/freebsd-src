@@ -830,13 +830,6 @@ tgt_dir2symlink() {
 		    "$dir" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" \
 		    "$symlink" >> "$NANO_METALOG"
 	fi
-	# XXXJL this is not really needed
-	# if [ -z "$NANO_NOPKGBASE" ]; then
-	# 	tgt_pkg shell <<-EOF
-	# 		INSERT INTO files (path, uname, gname, perm, fflags, symlink_target)
-	# 		VALUES ('$dir', '$NANO_DEF_UNAME', '$NANO_DEF_GNAME', '$mode', 0, '$symlink');
-	# 	EOF
-	# fi
 	)
 }
 
