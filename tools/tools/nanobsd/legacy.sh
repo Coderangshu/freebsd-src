@@ -109,6 +109,10 @@ NANO_BOOTLOADER="boot/boot0sio"
 # Size of the /tmp+/var ramdisk in 512 bytes sectors
 NANO_RAM_TMPVARSIZE=10240
 
+# Where cust_pkgng() finds packages to install
+NANO_PACKAGE_DIR=${NANO_SRC}/${NANO_TOOLS}/Pkg
+NANO_PACKAGE_LIST="*"
+
 #######################################################################
 # Functions and variable definitions used by the legacy nanobsd
 # image building system
@@ -606,4 +610,79 @@ tgt_etc_remount() {
 	echo "mount -o ro /dev/${NANO_DRIVE}${NANO_SLICE_CFG}" > conf/default/etc/remount
 	tgt_touch conf/default/etc/remount
 	)
+}
+
+#######################################################################
+# Install packages from ${NANO_PACKAGE_DIR}
+
+#
+# Bootstrap pkg and install all packages from NANO_PACKAGE_DIR
+# into NANO_WORLDDIR via a nullfs-mounted chroot
+#
+cust_pkgng() {
+	if ! $do_root && [ -n "$NANO_NOPRIV_BUILD" ]; then
+		pprint 2 'Skipping "cust_pkgng" (unprivileged builds not supported yet)'
+		return 0
+	fi
+
+	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
+	local PKG_CONF="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
+	local PKGCMD="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"
+
+	# Ensure pkg.conf points pkg to where the package meta data lives
+	touch ${PKG_CONF}
+	if grep -Eiq '^PKG_DBDIR:.*' ${PKG_CONF}; then
+		sed -i -e "\|^PKG_DBDIR:.*|Is||PKG_DBDIR: "\"${NANO_PKG_META_BASE}/pkg\""|" ${PKG_CONF}
+	else
+		echo "PKG_DBDIR: \"${NANO_PKG_META_BASE}/pkg\"" >> ${PKG_CONF}
+	fi
+
+	# If the package directory doesn't exist, we're done
+	NANO_PACKAGE_DIR="$(realpath $NANO_PACKAGE_DIR)"
+	if [ ! -d ${NANO_PACKAGE_DIR} ]; then
+		echo "DONE 0 packages"
+		return 0
+	fi
+
+	# Find a pkg-* package
+	for x in $(find -s ${NANO_PACKAGE_DIR} -iname 'pkg-*'); do
+		_NANO_PKG_PACKAGE=$(basename "$x")
+	done
+	if [ -z "${_NANO_PKG_PACKAGE}" -o ! -f "${NANO_PACKAGE_DIR}/${_NANO_PKG_PACKAGE}" ]; then
+		err "FAILED: need a pkg/ package for bootstrapping"
+	fi
+
+	# Mount packages into chroot
+	mkdir -p ${NANO_WORLDDIR}/_.p
+	mount -t nullfs -o noatime -o ro ${NANO_PACKAGE_DIR} ${NANO_WORLDDIR}/_.p
+	mount -t devfs devfs ${NANO_WORLDDIR}/dev
+
+	trap "nano_umount ${NANO_WORLDDIR}/dev; nano_umount ${NANO_WORLDDIR}/_.p ; rm -xrf ${NANO_WORLDDIR}/_.p" 1 2 15 EXIT
+
+	# Install pkg-* package
+	CR "${PKGCMD} add /_.p/${_NANO_PKG_PACKAGE}"
+
+	(
+		# Expand any glob characters in package list
+		cd "${NANO_PACKAGE_DIR}"
+		_PKGS=$(find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort -u)
+
+		# Show todo
+		todo=$(echo "$_PKGS" | wc -l)
+		echo "=== TODO: $todo"
+		echo "$_PKGS"
+		echo "==="
+
+		# Install packages
+		for _PKG in $_PKGS; do
+			CR "${PKGCMD} add /_.p/${_PKG}"
+		done
+	)
+
+	CR0 "${PKGCMD} info"
+
+	trap - 1 2 15 EXIT
+	nano_umount ${NANO_WORLDDIR}/dev
+	nano_umount ${NANO_WORLDDIR}/_.p
+	rm -xrf ${NANO_WORLDDIR}/_.p
 }
