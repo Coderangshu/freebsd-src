@@ -80,6 +80,13 @@ WITHOUT_TESTS=true
 # Kernel config file to use
 NANO_KERNEL=GENERIC
 
+#
+# Boot sub-directory containing kernel and modules
+# Custom kernels for pkgbase installations have names like:
+# kernel.GENERIC-MMCCAM or kernel.GENERIC-NODEBUG
+#
+NANO_LOADER_KERNEL="kernel"
+
 # Kernel modules to install. If empty, no modules are installed.
 # Use "default" to install all built modules
 NANO_MODULES=
@@ -1321,6 +1328,9 @@ setup_nanobsd_etc() {
 	{
 		echo
 		echo '###  NanoBSD configuration  ##################################'
+		if [ -n "$NANO_LOADER_KERNEL" ]; then
+			echo "kernel=\"${NANO_LOADER_KERNEL}\"		# /boot sub-directory containing kernel and modules"
+		fi
 		echo 'hostuuid_load="NO"'
 		echo 'entropy_cache_load="NO"		# Disable loading cached entropy at boot time.'
 		echo 'kern.random.initial_seeding.disable_bypass_warnings="1"	# Do not log a warning'
