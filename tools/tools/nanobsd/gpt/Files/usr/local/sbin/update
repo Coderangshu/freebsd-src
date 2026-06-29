@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 [XXX]
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+
+set -e
+
+. /etc/nanobsd.conf
+
+: "${NANO_ROOT:?NANO_ROOT not set in /etc/nanobsd.conf}"
+: "${NANO_ALTROOT:?NANO_ALTROOT not set in /etc/nanobsd.conf}"
+
+current_root=$(df -n / | awk 'END {print $1}')
+
+case "$current_root" in
+"/dev/gpt/${NANO_ALTROOT}")
+	exec sh /usr/local/sbin/updatep1
+	;;
+"/dev/gpt/${NANO_ROOT}")
+	exec sh /usr/local/sbin/updatep2
+	;;
+*)
+	echo "Invalid root device '${current_root}'." >&2
+	exit 1
+	;;
+esac

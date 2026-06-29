@@ -35,19 +35,21 @@ set -e
 
 . /etc/nanobsd.conf
 
-if mount | grep ${NANO_DRIVE}s1 > /dev/null ; then
-	echo "You are running partition 1 already"
-	echo "you probably want to use 'updatep2' instead"
+: "${NANO_DRIVE:?NANO_DRIVE not set in /etc/nanobsd.conf}"
+
+if mount | grep -q -F "${NANO_DRIVE}s1"; then
+	echo "You are running partition 1 already." >&2
+	echo "You probably want to use 'updatep2' instead." >&2
 	exit 1
 fi
 
-# Blow away old system.
-dd if=/dev/zero of=/dev/${NANO_DRIVE}s1 bs=1m count=1 > /dev/null 2>&1
+# Blow away old system
+dd if=/dev/zero of="/dev/${NANO_DRIVE}s1" bs=1m count=1 > /dev/null 2>&1
 
 # Copy in new system
-dd of=/dev/${NANO_DRIVE}s1 obs=64k
+dd of="/dev/${NANO_DRIVE}s1" obs=64k
 
 # Check that it worked
-fsck_ffs -n /dev/${NANO_DRIVE}s1a
+fsck_ffs -n "/dev/${NANO_DRIVE}s1a"
 
-gpart set -a active -i 1 ${NANO_DRIVE}
+gpart set -a active -i 1 "${NANO_DRIVE}"
