@@ -27,7 +27,7 @@
 
 set -e
 
-NANO_PLAN=gpt
+NANO_PLAN=default
 
 #
 # Space-separated list of boot types; options: BIOS, UEFI (case-insensitive).
@@ -60,8 +60,8 @@ NANO_DRIVE="gpt/${NANO_LABEL}" || true
 
 NANO_BOOTLOADER="boot/gptboot"
 
-NANO_CUST_FILESDIR="${NANO_TOOLS}/gpt/Files"
-NANO_CUST_FILES_MTREE="${NANO_TOOLS}/gpt/Files.mtree"
+NANO_CUST_FILESDIR="${NANO_TOOLS}/default/Files"
+NANO_CUST_FILES_MTREE="${NANO_TOOLS}/default/Files.mtree"
 
 # Create the /etc/fstab file
 tgt_write_fstab() {

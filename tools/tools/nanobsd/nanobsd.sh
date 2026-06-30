@@ -33,9 +33,9 @@ legacy() {
     . "${topdir}/legacy.sh"
 }
 
-gpt() {
+default() {
     # Pull in gpt stuff on demand
-    . "${topdir}/gpt.sh"
+    . "${topdir}/default.sh"
 }
 
 is_defined() {
