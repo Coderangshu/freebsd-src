@@ -415,6 +415,7 @@ NANO_NOPKGBASE=
 NANO_ABI=$(pkg config ABI)
 NANO_OSVERSION=$(pkg config OSVERSION)
 NANO_PKGBASE_DIR="base_latest"
+NANO_KMODS_DIR="kmods_latest"
 NANO_PORTS_DIR="latest"
 NANO_PKGBASE_LIST="FreeBSD-set-base FreeBSD-kernel-generic"
 
@@ -628,6 +629,13 @@ nano_pkg_repo_conf() {
 	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
 FreeBSD-ports: {
   url: "pkg+https://pkg.freebsd.org/\${ABI}/${NANO_PORTS_DIR}",
+  mirror_type: "srv",
+  signature_type: "fingerprints",
+  fingerprints: "/usr/share/keys/pkg",
+  enabled: yes
+}
+FreeBSD-ports-kmods: {
+  url: "pkg+https://pkg.FreeBSD.org/\${ABI}/${NANO_KMODS_DIR}",
   mirror_type: "srv",
   signature_type: "fingerprints",
   fingerprints: "/usr/share/keys/pkg",
