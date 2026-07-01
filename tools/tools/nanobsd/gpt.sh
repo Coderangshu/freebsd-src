@@ -486,3 +486,37 @@ tgt_switch_root_fstab() {
 		sed -i "" "s=/dev/gpt/${NANO_LABEL}${current}=/dev/gpt/${NANO_LABEL}${new}=g" "${f}"
 	done
 }
+
+# Patch gptboot rc script to understand ping-ponging between partitions
+tgt_patch_gptboot() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 666 etc/rc.d/gptboot
+	if ! patch -s -V none etc/rc.d/gptboot <<\EOF
+--- etc/rc.d/gptboot
++++ etc/rc.d/gptboot
+@@ -58,6 +58,12 @@
+ 					# We want to log success after all failures.
+ 					echo -n "Boot from ${part} succeeded."
+ 					gpart unset -a bootonce -i ${pos} ${disk} >/dev/null
++					old_bootme=$(gpart show "${disk}" |
++					    egrep 'freebsd-ufs.*(\[|,)bootme(,|\])' | awk '{print $3}')
++					if [ -n "${old_bootme}" ]; then
++						gpart unset -a bootme -i "${old_bootme}" "${disk}" >/dev/null
++					fi
++					gpart set -a bootme -i ${pos} ${disk} >/dev/null
+ 				fi
+ 			fi
+ 			;;
+EOF
+	then
+		err "Patching /etc/rc.d/gptboot failed!"
+	fi
+	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 555 etc/rc.d/gptboot
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_update_file_sha256 etc/rc.d/gptboot
+		tgt_pkg_update_config_files_content etc/rc.d/gptboot
+	fi
+	)
+}

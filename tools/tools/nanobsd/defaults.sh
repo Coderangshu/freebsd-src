@@ -1369,9 +1369,13 @@ EOF
 		err "Regular expression pattern not found"
 	fi
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 444 etc/defaults/rc.conf
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+	if [ -z "$NANO_NOPKGBASE" ]; then
 		tgt_pkg_update_file_sha256 etc/defaults/rc.conf
 		tgt_pkg_update_config_files_content etc/defaults/rc.conf
+	fi
+
+	if [ "$NANO_PLAN" = "default" ]; then
+		tgt_patch_gptboot
 	fi
 
 	tgt_write_fstab

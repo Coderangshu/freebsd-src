@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 [XXX]
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+
+#
+# Script to update partition 1 on a NanoBSD system.
+#
+# usage:
+#	ssh somewhere cat image.s1 | sh updatep1
+#
+
+set -e
+
+. /etc/nanobsd.conf
+
+: "${NANO_ROOT:?NANO_ROOT not set in /etc/nanobsd.conf}"
+
+root_mountfrom=$(kenv vfs.root.mountfrom)
+root_mountfrom=${root_mountfrom#*:}
+
+if [ "$root_mountfrom" = "/dev/gpt/${NANO_ROOT}" ]; then
+	echo "You are running partition 1 already." >&2
+	echo "You probably want to use 'updatep2' instead." >&2
+	exit 1
+fi
+
+component=$(glabel status | awk -v label="gpt/${NANO_ROOT}" '$1 == label {print $3}')
+if [ -z "$component" ]; then
+	echo "Could not find provider for 'gpt/${NANO_ROOT}'." >&2
+	exit 1
+fi
+index="${component##*p}"
+geom="${component%p*}"
+
+# Blow away old system
+dd if=/dev/zero of="/dev/gpt/${NANO_ROOT}" bs=1m count=1 status=none
+
+# Copy in new system
+dd of="/dev/gpt/${NANO_ROOT}" obs=64k
+
+# Check that it worked
+fsck_ufs -n "/dev/gpt/${NANO_ROOT}"
+
+gpart set -a bootonce -i "$index" "$geom"
+
+echo "Done!"

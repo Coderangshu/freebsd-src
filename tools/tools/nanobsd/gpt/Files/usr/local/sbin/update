@@ -12,17 +12,20 @@ set -e
 : "${NANO_ROOT:?NANO_ROOT not set in /etc/nanobsd.conf}"
 : "${NANO_ALTROOT:?NANO_ALTROOT not set in /etc/nanobsd.conf}"
 
-current_root=$(df -n / | awk 'END {print $1}')
+root_mountfrom=$(kenv vfs.root.mountfrom)
+root_mountfrom=${root_mountfrom#*:}
 
-case "$current_root" in
+case "$root_mountfrom" in
 "/dev/gpt/${NANO_ALTROOT}")
+	echo "Updating '${NANO_ROOT}'..."
 	exec sh /usr/local/sbin/updatep1
 	;;
 "/dev/gpt/${NANO_ROOT}")
+	echo "Updating '${NANO_ALTROOT}'..."
 	exec sh /usr/local/sbin/updatep2
 	;;
 *)
-	echo "Invalid root device '${current_root}'." >&2
+	echo "Invalid root device '${root_mountfrom}'." >&2
 	exit 1
 	;;
 esac
