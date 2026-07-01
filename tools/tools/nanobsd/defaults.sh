@@ -598,7 +598,12 @@ tgt_pkg() {
 
 # Run pkg(8) in chroot mode against NANO_WORLDDIR
 tgt_pkg_chroot() {
-	pkg_cmd --chroot "$NANO_WORLDDIR" "$@"
+	pkg --chroot "$NANO_WORLDDIR" \
+	    -o ABI="$NANO_ABI" \
+	    -o ASSUME_ALWAYS_YES=yes \
+	    -o IGNORE_OSVERSION=yes \
+	    -o OSVERSION="$NANO_OSVERSION" \
+	    "$@"
 }
 
 # Return the directory used to cache downloaded packages
