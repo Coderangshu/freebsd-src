@@ -1504,15 +1504,8 @@ get_bootcode() {
 		esac
 		;;
 	[Uu][Ee][Ff][Ii])
-		# XXXJL we want /boot/loader.efi for Primary/Secondary ESP partitions.
-		# These are supposed to be switched with efibootmgr -n.
-		# For the Recovery ESP with UFS, we want /boot/gptboot.efi,
-		# this allows us to switch using gpart set -a bootonce.
-		# For the Recovery ESP with ZFS, we want /boot/loader.efi,
-		# coupled with a bare-minimum zpool-features(7)?
 		case "$part_type" in
-		[Gg][Pp][Tt]) echo "boot/loader.efi" ;;
-		[Zz][Ff][Ss]) echo "boot/loader.efi" ;;
+		[Gg][Pp][Tt]) echo "boot/gptboot.efi" ;;
 		*) err "Unsupported UEFI partition type '${part_type}'" ;;
 		esac
 		;;

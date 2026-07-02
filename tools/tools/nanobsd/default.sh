@@ -36,9 +36,8 @@ NANO_PLAN=default
 # Notes common to all layouts:
 #   - [PMBR boot code] is written via "mkimg -b boot/pmbr"; it is the
 #     protective MBR boot code, not a GPT partition entry.
-#   - ESPs: efiboot0 is the recovery ESP, efiboot1 the primary ESP
-#     (mounted at /boot/efi), efiboot2 the secondary ESP, only created
-#     when NANO_IMAGES > 1.
+#   - efiboot0 is the sole ESP; it carries gptboot.efi, which selects
+#     the root partition from the GPT bootme/bootonce attributes.
 #   - [freebsd-swap/swap0] is only created when NANO_SWAP_SIZE > 0.
 #   - root B (${NANO_LABEL}2) only exists when NANO_IMAGES > 1.
 #   - root C (${NANO_LABEL}3) only exists when NANO_BACKUP_PART=1.
@@ -54,9 +53,7 @@ NANO_PLAN=default
 #   [freebsd-ufs/data]              data partition (optional)
 #
 # "UEFI":
-#   [efi/efiboot0]                  recovery ESP (FAT)
-#   [efi/efiboot1]                  primary ESP (FAT, mounted /boot/efi)
-#   [efi/efiboot2]                  secondary ESP (FAT)
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
 #   [freebsd-swap/swap0]            swap (optional)
 #   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
 #   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
@@ -67,9 +64,7 @@ NANO_PLAN=default
 # "BIOS UEFI" (default):
 #   [PMBR boot code]                boot/pmbr (not a GPT entry)
 #   [freebsd-boot/gptboot0]         /boot/gptboot
-#   [efi/efiboot0]                  recovery ESP (FAT)
-#   [efi/efiboot1]                  primary ESP (FAT, mounted /boot/efi)
-#   [efi/efiboot2]                  secondary ESP (FAT)
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
 #   [freebsd-swap/swap0]            swap (optional)
 #   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
 #   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
@@ -136,10 +131,7 @@ tgt_write_fstab() {
 	# Bake the GPT partition indices used by the runtime gptboot script
 	_pidx=0
 	is_boot_type BIOS && _pidx=$(( _pidx + 1 ))			# gptboot0
-	if is_boot_type UEFI; then
-		_pidx=$(( _pidx + 2 ))					# efiboot0 + efiboot1
-		[ "$NANO_IMAGES" -gt 1 ] && _pidx=$(( _pidx + 1 ))	# efiboot2
-	fi
+	is_boot_type UEFI && _pidx=$(( _pidx + 1 ))			# efiboot0
 	[ "$NANO_SWAP_SIZE" -gt 0 ] && _pidx=$(( _pidx + 1 ))		# swap0
 	echo "NANO_PART_ROOT_IDX=$(( _pidx + 1 ))" >> etc/nanobsd.conf
 	if [ "$NANO_IMAGES" -gt 1 ]; then
@@ -152,9 +144,6 @@ tgt_write_fstab() {
 	tgt_touch etc/nanobsd.conf
 
 	printf_fstab "# Device" Mountpoint FStype Options Dump "Pass#"
-	if is_boot_type UEFI; then
-		printf_fstab "/dev/gpt/efiboot1" /boot/efi msdosfs rw,noauto 2 2
-	fi
 	printf_fstab "/dev/gpt/${NANO_ROOT}" / ufs ro 1 1
 	printf_fstab /dev/gpt/${NANO_PARTITION_CFG} /cfg ufs rw,noauto 2 2
 	if [ "$NANO_SWAP_SIZE" -gt 0 ]; then
@@ -249,13 +238,12 @@ make_boot_partition() {
 
 #
 # Create an EFI System Partition image file
-# Input: $1 = label, $2 = is the recovery ESP?
+# Input: $1 = label
 #
 make_esp_partition() {
-	local bootcode efibootname espdir fat_size fat_type is_recovery name
+	local bootcode efibootname espdir fat_size fat_type name
 
 	name="$1"
-	is_recovery="${2:-}"
 
 	FAT16MIN=2150400
 	FAT32MIN=34091008
@@ -273,11 +261,7 @@ make_esp_partition() {
 	espdir="${NANO_OBJ}/_.efi"
 	rm -rf "${espdir}"
 
-	if [ "$is_recovery" = "recovery" ]; then
-		mkdir -p "${espdir}/EFI/BOOT"
-	else
-		mkdir -p "${espdir}/EFI/FreeBSD"
-	fi
+	mkdir -p "${espdir}/EFI/BOOT"
 
 	efibootname=$(get_uefi_bootname)
 	bootcode="${NANO_WORLDDIR}/$(get_bootcode uefi gpt)"
@@ -285,13 +269,7 @@ make_esp_partition() {
 	if [ ! -f "$bootcode" ]; then
 		echo "Image will not be bootable"
 	fi
-
-	if [ "$is_recovery" = "recovery" ]; then
-		cp -p "${NANO_WORLDDIR}/boot/gptboot.efi" \
-		    "${espdir}/EFI/BOOT/${efibootname}.EFI"
-	else
-		cp -p "$bootcode" "${espdir}/EFI/FreeBSD/loader.efi"
-	fi
+	cp -p "$bootcode" "${espdir}/EFI/BOOT/${efibootname}.EFI"
 
 	# XXXJL missing metalog
 	makefs -t msdos \
@@ -397,19 +375,9 @@ calculate_partitioning() {
 		avail_sects -= (align - sstart)
 		sstart = align
 
-		# Recovery ESP (if any)
+		# ESP (if any)
 		if (esp_sects > 0) {
 			print_line("efi", esp_sects, "efiboot0")
-		}
-
-		# Primary ESP (if any)
-		if (esp_sects > 0) {
-			print_line("efi", esp_sects, "efiboot1")
-		}
-
-		# Secondary ESP (if any)
-		if (esp_sects > 0 && $2 > 1) {
-			print_line("efi", esp_sects, "efiboot2")
 		}
 
 		if (swap_sects > 0) {
@@ -489,7 +457,7 @@ create_diskimage() {
 
 	(
 	local IMG code_sects code_size
-	local bootcode cfg data efiboot0 efiboot1 efiboot2 gptboot0 swap0
+	local bootcode cfg data efiboot0 gptboot0 swap0
 	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" code3 "${NANO_BACKUP}"
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
@@ -501,10 +469,9 @@ create_diskimage() {
 		bootcode="-b ${NANO_WORLDDIR}/boot/pmbr"
 	fi
 
-	for image in gptboot0 efiboot0 efiboot1 efiboot2 swap0 \
+	for image in gptboot0 efiboot0 swap0 \
 	    ${NANO_ROOT} ${NANO_ALTROOT} ${NANO_BACKUP} cfg data; do
-		match=$(awk -v dir="$NANO_OBJ" -v img="$image" \
-			-v ssize="$NANO_SECTOR_SIZE" \
+		match=$(awk -v dir="$NANO_OBJ" -v img="$image" -v ssize="$NANO_SECTOR_SIZE" \
 			'$5 == img {
 				if ($5 == "swap0") {
 					print "-p", $2 "/" $5 "::" ($4 * ssize) ":" ($3 * ssize)
@@ -533,11 +500,9 @@ create_diskimage() {
 		make_boot_partition "gptboot0"
 	fi
 
-	# Create recovery, primary and secondary ESPs (if any)
+	# Create the ESP (if any)
 	if is_boot_type UEFI; then
-		make_esp_partition "efiboot0" "recovery"
-		make_esp_partition "efiboot1"
-		make_esp_partition "efiboot2"
+		make_esp_partition "efiboot0"
 	fi
 
 	# Swap partition must be greater than 100 MiB
@@ -588,8 +553,6 @@ create_diskimage() {
 	    ${bootcode} \
 	    ${gptboot0} \
 	    ${efiboot0} \
-	    ${efiboot1} \
-	    ${efiboot2} \
 	    ${swap0} \
 	    ${code1} \
 	    ${code2} \
@@ -601,8 +564,6 @@ create_diskimage() {
 	# Cleanup
 	rm -f "${NANO_OBJ}/_.gptboot0.image" \
 	    "${NANO_OBJ}/_.efiboot0.image" \
-	    "${NANO_OBJ}/_.efiboot1.image" \
-	    "${NANO_OBJ}/_.efiboot2.image" \
 	    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" \
 	    "${NANO_OBJ}/_.${NANO_BACKUP}.image" \
 	    "${NANO_OBJ}/_.cfg.image" \
