@@ -1325,8 +1325,7 @@ setup_nanobsd() {
 
 #
 # Create the diskless marker file,
-# disable entropy/UUID at boot in loader.conf/rc.conf,
-# create nanobsd.conf and fstab
+# disable entropy/UUID at boot in loader.conf/rc.conf, create fstab
 #
 setup_nanobsd_etc() {
 	pprint 2 "configure nanobsd /etc"

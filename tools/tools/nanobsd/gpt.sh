@@ -42,12 +42,15 @@ NANO_BOOT_TYPE="BIOS UEFI"
 # /data partition will be /dev/gpt/data
 NANO_LABEL=code
 NANO_PARTITION_ROOT=1
-NANO_PARTITION_ALTROOT=2
 NANO_PARTITION_CFG=cfg
 NANO_PARTITION_DATA=data
 
 NANO_ROOT="${NANO_LABEL}${NANO_PARTITION_ROOT}"
-NANO_ALTROOT="${NANO_LABEL}${NANO_PARTITION_ALTROOT}"
+
+if [ "$NANO_IMAGES" -gt 1 ]; then
+	NANO_PARTITION_ALTROOT=2
+	NANO_ALTROOT="${NANO_LABEL}${NANO_PARTITION_ALTROOT}"
+fi
 
 # Override NANO_DRIVE with NANO_LABEL
 if [ -z "${NANO_LABEL}" ]; then
@@ -375,7 +378,7 @@ create_diskimage() {
 	(
 	local IMG code_sects code_size
 	local bootcode cfg data efiboot0 gptboot0 swap0
-	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}"
+	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" # XXXJL NANO_ALTROOT
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
