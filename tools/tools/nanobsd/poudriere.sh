@@ -28,7 +28,7 @@
 #######################################################################
 # Poudriere variables and helpers
 #
-# Sourced unconditionally by nanobsd.sh.  cust_pkgng() in defaults.sh
+# Sourced unconditionally by nanobsd.sh.  cust_pkgng() in customize.subr
 # calls _nano_poudriere_build() when NANO_PKGLIST is set.
 
 NANO_PKGLIST=""				        # path to pkglist file (ports origins, one per line)
