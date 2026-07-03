@@ -1286,6 +1286,22 @@ setup_nanobsd() {
 		_xxx_pkg_add_var_db_files_to_metalog
 	fi
 
+	#
+	# Change the SSH AuthorizedKeysFile location to
+	# /etc/ssh/authorized_keys/%u
+	#
+	if [ -f etc/ssh/sshd_config ]; then
+		tgt_dir etc/ssh/authorized_keys
+
+		sed -i "" -E 's|^#?AuthorizedKeysFile.*|AuthorizedKeysFile /etc/ssh/authorized_keys/%u|' \
+		    etc/ssh/sshd_config
+
+		if [ -z "$NANO_NOPKGBASE" ]; then
+			tgt_pkg_update_file_sha256 etc/ssh/sshd_config
+			tgt_pkg_update_config_files_content etc/ssh/sshd_config
+		fi
+	fi
+
 	for d in var etc; do
 		# Link /$d under /conf
 		# we use hard links so we have them both places.
