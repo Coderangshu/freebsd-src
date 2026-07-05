@@ -30,6 +30,50 @@ set -e
 NANO_PLAN=default
 
 #
+# Partition layout varies by NANO_BOOT_TYPE (partitions are emitted in this
+# order by calculate_partitioning).
+#
+# Notes common to all layouts:
+#   - [PMBR boot code] is written via "mkimg -b boot/pmbr"; it is the
+#     protective MBR boot code, not a GPT partition entry.
+#   - efiboot0 is the sole ESP; it carries gptboot.efi, which selects
+#     the root partition from the GPT bootme/bootonce attributes.
+#   - [freebsd-swap/swap0] is only created when NANO_SWAP_SIZE > 0.
+#   - root B (${NANO_LABEL}2) only exists when NANO_IMAGES > 1.
+#   - backup root only exists when NANO_BACKUP_PART=1.
+#
+# "BIOS":
+#   [PMBR boot code]                boot/pmbr (not a GPT entry)
+#   [freebsd-boot/gptboot0]         /boot/gptboot
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/${NANO_LABEL}3]    root C backup (golden fallback)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+# "UEFI":
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/${NANO_LABEL}3]    root C backup (golden fallback)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+# "BIOS UEFI" (default):
+#   [PMBR boot code]                boot/pmbr (not a GPT entry)
+#   [freebsd-boot/gptboot0]         /boot/gptboot
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/${NANO_LABEL}3]    root C backup (golden fallback)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+
+#
 # Space-separated list of boot types; options: BIOS, UEFI (case-insensitive).
 # Default enables both.
 #
@@ -45,11 +89,22 @@ NANO_PARTITION_ROOT=1
 NANO_PARTITION_CFG=cfg
 NANO_PARTITION_DATA=data
 
+#
+# When 1, add a backup code partition as a permanent golden fallback
+# root, placed after the last code partition
+#
+: "${NANO_BACKUP_PART:=0}"
+
 NANO_ROOT="${NANO_LABEL}${NANO_PARTITION_ROOT}"
 
 if [ "$NANO_IMAGES" -gt 1 ]; then
 	NANO_PARTITION_ALTROOT=2
 	NANO_ALTROOT="${NANO_LABEL}${NANO_PARTITION_ALTROOT}"
+fi
+
+if [ "$NANO_BACKUP_PART" -eq 1 ]; then
+	NANO_PARTITION_BACKUP=$(( NANO_IMAGES + 1 ))
+	NANO_BACKUP="${NANO_LABEL}${NANO_PARTITION_BACKUP}"
 fi
 
 # Override NANO_DRIVE with NANO_LABEL
@@ -72,6 +127,9 @@ tgt_write_fstab() {
 	echo "NANO_LABEL=${NANO_LABEL}" >> etc/nanobsd.conf
 	echo "NANO_ROOT=${NANO_ROOT}" >> etc/nanobsd.conf
 	echo "NANO_ALTROOT=${NANO_ALTROOT}" >> etc/nanobsd.conf
+	if [ -n "${NANO_BACKUP}" ]; then
+		echo "NANO_BACKUP=${NANO_BACKUP}" >> etc/nanobsd.conf
+	fi
 	tgt_touch etc/nanobsd.conf
 
 	printf_fstab "# Device" Mountpoint FStype Options Dump "Pass#"
@@ -228,7 +286,8 @@ calculate_partitioning() {
 	echo "$NANO_MEDIASIZE" "$NANO_IMAGES" "$NANO_SECTOR_SIZE" \
 	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
 	    "$boot_sects" "$esp_sects" "$NANO_SWAP_SIZE" "$NANO_ROOT" \
-	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" |
+	    "${NANO_ALTROOT:--}" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
+	    "${NANO_BACKUP_PART}" "${NANO_BACKUP:--}" |
 	    awk '
 	function roundup(sects) {
 		return int((sects + align - 1) / align) * align
@@ -315,7 +374,7 @@ calculate_partitioning() {
 			total_code_sects = avail_sects - cfg_sects - \
 			    ((data_sects > 0) ? data_sects : 0)
 			total_code_sects = int(total_code_sects / align) * align
-			code_sects = int((total_code_sects / $2) / align) * align
+			code_sects = int((total_code_sects / ($2 + $15)) / align) * align
 		} else {
 			# (rounded up)
 			code_sects = roundup(code_sects)
@@ -327,6 +386,11 @@ calculate_partitioning() {
 		# Second code partition (if any)
 		if ($2 > 1) {
 			print_line("freebsd-ufs", code_sects, $12)
+		}
+
+		# Backup partition C (permanent golden image)
+		if ($15 == 1) {
+			print_line("freebsd-ufs", code_sects, $16)
 		}
 
 		# Configuration partition
@@ -378,7 +442,8 @@ create_diskimage() {
 	(
 	local IMG code_sects code_size
 	local bootcode cfg data efiboot0 gptboot0 swap0
-	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" # XXXJL NANO_ALTROOT
+	local part_root part_altroot part_backup
+	local "${NANO_ROOT}" ${NANO_ALTROOT} ${NANO_BACKUP} # XXXJL NANO_ALTROOT
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
@@ -390,7 +455,7 @@ create_diskimage() {
 	fi
 
 	for image in gptboot0 efiboot0 swap0 \
-	    ${NANO_ROOT} ${NANO_ALTROOT} cfg data; do
+	    ${NANO_ROOT} ${NANO_ALTROOT} ${NANO_BACKUP} cfg data; do
 		match=$(awk -v dir="$NANO_OBJ" -v img="$image" -v ssize="$NANO_SECTOR_SIZE" \
 			'$5 == img {
 				if ($5 == "swap0") {
@@ -408,11 +473,12 @@ create_diskimage() {
 	done
 
 	# Use fixed variable names when dealing with code partitions
-	eval "code1=\"\$${NANO_ROOT}\""
-	eval "code2=\"\$${NANO_ALTROOT}\""
+	eval "part_root=\"\$${NANO_ROOT}\""
+	[ -n "${NANO_ALTROOT}" ] && eval "part_altroot=\"\$${NANO_ALTROOT}\""
+	[ -n "${NANO_BACKUP}" ] && eval "part_backup=\"\$${NANO_BACKUP}\""
 
-	# Rename code1 image name to match NANO_IMG1NAME
-	code1=$(echo "$code1" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
+	# Rename root image name to match NANO_IMG1NAME
+	part_root=$(echo "$part_root" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
 
 	# Create boot partition (if any)
 	if is_boot_type BIOS; then
@@ -433,15 +499,25 @@ create_diskimage() {
 	if [ "$NANO_IMAGES" -gt 1 ]; then
 		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
 			echo "Duplicating to second image..."
-			tgt_switch_root_fstab 1 2
+			tgt_switch_root_fstab "${NANO_ROOT}" "${NANO_ALTROOT}"
 			nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 			    "${NANO_METALOG}" "$code_size" \
 			    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" "${NANO_WORLDDIR}"
-			tgt_switch_root_fstab 2 1
+			tgt_switch_root_fstab "${NANO_ALTROOT}" "${NANO_ROOT}"
 		else
-			code2=$(echo "$code2" |
+			part_altroot=$(echo "$part_altroot" |
 			    sed "s#=${NANO_OBJ}/_.${NANO_ALTROOT}.image#:${code_size}#")
 		fi
+	fi
+
+	# Create backup code partition (permanent golden image)
+	if [ -n "${NANO_BACKUP}" ]; then
+		echo "Creating backup image..."
+		tgt_switch_root_fstab "${NANO_ROOT}" "${NANO_BACKUP}"
+		nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
+		    "${NANO_METALOG}" "$code_size" \
+		    "${NANO_OBJ}/_.${NANO_BACKUP}.image" "${NANO_WORLDDIR}"
+		tgt_switch_root_fstab "${NANO_BACKUP}" "${NANO_ROOT}"
 	fi
 
 	# Create cfg partition
@@ -463,8 +539,9 @@ create_diskimage() {
 	    ${gptboot0} \
 	    ${efiboot0} \
 	    ${swap0} \
-	    ${code1} \
-	    ${code2} \
+	    ${part_root} \
+	    ${part_altroot} \
+	    ${part_backup} \
 	    ${cfg} \
 	    ${data} \
 	    -o ${IMG}
@@ -473,20 +550,26 @@ create_diskimage() {
 	rm -f "${NANO_OBJ}/_.gptboot0.image" \
 	    "${NANO_OBJ}/_.efiboot0.image" \
 	    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" \
+	    "${NANO_OBJ}/_.${NANO_BACKUP}.image" \
 	    "${NANO_OBJ}/_.cfg.image" \
 	    "${NANO_OBJ}/_.data.image" \
 	) > "${NANO_LOG}/_.di" 2>&1
 }
 
+#
+# Rewrite the root device in the image's fstab files from one GPT label
+# to another, used when building the alternate and backup root images.
+# Input: $1 = current label (e.g. code1), $2 = new label (e.g. code2)
+#
 # XXXJL FIXME
 tgt_switch_root_fstab() {
-	local current new
+	local current new f
 	current="$1"
 	new="$2"
 
-	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
-		sed -i "" "s=/dev/gpt/efiboot${current}=/dev/gpt/efiboot${new}=g" "${f}"
-		sed -i "" "s=/dev/gpt/${NANO_LABEL}${current}=/dev/gpt/${NANO_LABEL}${new}=g" "${f}"
+	for f in "${NANO_WORLDDIR}/etc/fstab" "${NANO_WORLDDIR}/conf/base/etc/fstab"; do
+		[ -f "${f}" ] || continue
+		sed -i "" "s=/dev/gpt/${current}=/dev/gpt/${new}=g" "${f}"
 	done
 }
 
