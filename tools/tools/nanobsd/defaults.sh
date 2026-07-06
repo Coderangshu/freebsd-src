@@ -441,7 +441,7 @@ nano_pkgbase_list() {
 	target="$1"
 	list=""
 
-	[ "$target" = "world" ] || [ -z "$target" ] && list="pkg"
+	[ -z "$target" ] && list="pkg"
 
 	for package in $NANO_PKGBASE_LIST; do
 		case "$package" in
@@ -459,7 +459,7 @@ nano_pkgbase_list() {
 	echo "$list"
 }
 
-# Return the non-kernel subset of NANO_PKGBASE_LIST plus "pkg"
+# Return the non-kernel subset of NANO_PKGBASE_LIST
 nano_pkgbase_world_list() {
 	nano_pkgbase_list "world"
 }
@@ -606,9 +606,20 @@ tgt_pkg_chroot() {
 	    "$@"
 }
 
-# Return the directory used to cache downloaded packages
-nano_pkg_cachedir() {
+# Return the ABI-level repository root; "make packages" REPODIR lands here
+nano_pkg_repo_basedir() {
 	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
+}
+
+# Return the directory used to cache packages (downloaded or locally built)
+# $1 = "base" or "ports"; defaults to ports. The base repo lives in
+# "latest" to match the "make packages" REPODIR layout.
+nano_pkg_cachedir() {
+	if [ "$1" = "base" ]; then
+		echo "$(nano_pkg_repo_basedir)/latest"
+	else
+		echo "$(nano_pkg_repo_basedir)/ports"
+	fi
 }
 
 # Copy FreeBSD pkg signing key fingerprints from the source tree
@@ -656,8 +667,12 @@ FreeBSD-base: {
 EOF
 # XXXJL FINGERPRINTS!
 	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
-FreeBSD-local: {
-  url: "file://$(nano_pkg_cachedir)",
+FreeBSD-local-base: {
+  url: "file://$(nano_pkg_cachedir base)",
+  enabled: no
+}
+FreeBSD-local-ports: {
+  url: "file://$(nano_pkg_cachedir ports)",
   enabled: no
 }
 EOF
@@ -665,8 +680,9 @@ EOF
 
 # XXXJL check with ashish/jrm if it is OK to clobber the cachedir like this
 # XXXJL add support for local FINGERPRINTS
+# $1 = "base" or "ports" (see nano_pkg_cachedir)
 nano_pkg_repo() {
-	pkg_cmd repo "$(nano_pkg_cachedir)"
+	pkg_cmd repo "$(realpath "$(nano_pkg_cachedir "$1")")"
 }
 
 nano_pkg_disable_repos() {
@@ -716,12 +732,17 @@ nano_fetch_pkgbase_packages() {
 	if $do_clean; then
 		rm -rf "${NANO_OBJ}/_.cache"
 		rm -rf "${NANO_WORLDDIR}/var/db/pkg"
-		mkdir -p "$(nano_pkg_cachedir)"
+		mkdir -p "$(nano_pkg_cachedir base)" "$(nano_pkg_cachedir ports)"
 		nano_pkg_freebsd_repo_keys
 		nano_pkg_repo_conf
 		tgt_pkg update
-		tgt_pkg install -F $(nano_pkgbase_list)
-		nano_pkg_repo
+		tgt_pkg -o PKG_CACHEDIR="$(nano_pkg_cachedir base)" \
+		    install -F $(nano_pkgbase_world_list) $(nano_pkgbase_kernel_list)
+		nano_pkg_repo base
+		# pkg(8) is not part of base; fetch it from the online ports
+		# repo into the ports cache so FreeBSD-local-ports can serve it
+		tgt_pkg fetch -d -r FreeBSD-ports pkg
+		nano_pkg_repo ports
 	else
 		pprint 2 "Using existing packages (as instructed)"
 	fi
@@ -1038,10 +1059,12 @@ install_precompiled_world() {
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		nano_pkg_freebsd_repo_keys
-		tgt_pkg update -r FreeBSD-local
+		tgt_pkg update -r FreeBSD-local-base
 		if [ -n "$(nano_pkgbase_world_list)" ]; then
-			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_world_list)
+			tgt_pkg install -r FreeBSD-local-base -U $(nano_pkgbase_world_list)
 		fi
+		tgt_pkg update -r FreeBSD-local-ports
+		tgt_pkg install -r FreeBSD-local-ports -U pkg
 		_xxx_tgt_pkg_triggers
 	else
 		for distset in $NANO_DISTRIBUTIONS; do
@@ -1112,7 +1135,7 @@ install_precompiled_kernel() {
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		if [ -n "$(nano_pkgbase_kernel_list)" ]; then
-			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_kernel_list)
+			tgt_pkg install -r FreeBSD-local-base -U $(nano_pkgbase_kernel_list)
 		fi
 	else
 		if [ -f "$(nano_distset_dir)/kernel.txz" ]; then

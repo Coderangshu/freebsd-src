@@ -137,7 +137,9 @@ cust_pkgng() {
 	fi
 
 	tgt_pkg install $NANO_PACKAGE_LIST
-	rm -rf "${NANO_WORLDDIR}/var/db/pkg/repos/FreeBSD-local" # XXXJL we do not want to ship with this repo
+	# XXXJL we do not want to ship with these repos
+	rm -rf "${NANO_WORLDDIR}/var/db/pkg/repos/FreeBSD-local-base" \
+	    "${NANO_WORLDDIR}/var/db/pkg/repos/FreeBSD-local-ports"
 
 	if [ -d "$NANO_PACKAGE_DIR" ]; then
 		trap - 1 2 15 EXIT
