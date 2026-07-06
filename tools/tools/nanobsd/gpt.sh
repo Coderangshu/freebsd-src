@@ -161,7 +161,7 @@ make_esp_partition() {
 	FAT32MIN=34091008
 
 	esp_sects=$(awk -v label="$name" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
-	fat_size=$(strtobytes "${esp_sects:-0}b")
+	fat_size=$(strtobytes "${esp_sects:-0}s")
 	if [ "$fat_size" -ge "$FAT32MIN" ]; then
 		fat_type=32
 	elif [ "$fat_size" -ge "$FAT16MIN" ]; then
@@ -220,7 +220,7 @@ calculate_partitioning() {
 	if is_boot_type BIOS; then
 		boot_type=1
 		# Boot partition is exactly 512 KiB
-		boot_size=$(strtobytes 512ki)
+		boot_size=$(strtobytes 512KiB)
 		boot_sects=$(( boot_size / NANO_SECTOR_SIZE ))
 	fi
 	is_boot_type UEFI && esp_sects=$(( NANO_EFI_BOOTPART_SIZE / NANO_SECTOR_SIZE ))

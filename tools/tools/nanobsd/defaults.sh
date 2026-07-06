@@ -1325,6 +1325,7 @@ setup_nanobsd() {
 		rm -f "${NANO_METALOG}.conf"
 	fi
 
+	# Size of the memory disk in 512-byte sectors, per diskless(8)
 	echo "$(( NANO_RAM_ETCSIZE / 512 ))" > conf/base/etc/md_size
 	echo "$(( NANO_RAM_TMPVARSIZE / 512 ))" > conf/base/var/md_size
 	tgt_touch conf/base/etc/md_size
@@ -1594,13 +1595,14 @@ err() {
 
 #
 # Convert a human-readable size string with a suffix into bytes.
-# Inspired by NetBSD's strsuftoll(3) and humanize_number(3).
+# Inspired by NetBSD's strsuftoll(3), humanize_number(3), and
+# newfs_msdos(8) argtooff().
 #
 # Supported suffixes:
-#   b           NANO_SECTOR_SIZE-byte blocks (Default: 512 bytes)
-#   k,m,g,t     SI units (1000^n)
-#   ki,mi,gi,ti IEC units (1024^n)
-#   w           sizeof(int) (4 bytes)
+#   k,m,g,t,p,e        SI units (1000^n)
+#   ki,mi,gi,ti,pi,ei  IEC units (1024^n)
+#   s                  NANO_SECTOR_SIZE-byte blocks (Default: 512 bytes)
+#   w                  sizeof(int) (4 bytes)
 #
 # Also accepts "x"-delimited products followed by a suffix
 # (e.g., "2x1024k", "4x512ki").
@@ -1608,43 +1610,39 @@ err() {
 # Output: byte count
 #
 strtobytes() {
-	local num result suffix
+	local input num result suffix
 
 	case "$1" in
-	*[Kk][Ii])
-		suffix=ki
-		num=${1%??}
-		;;
-	*[Mm][Ii])
-		suffix=mi
-		num=${1%??}
-		;;
-	*[Gg][Ii])
-		suffix=gi
-		num=${1%??}
-		;;
-	*[Tt][Ii])
-		suffix=ti
-		num=${1%??}
-		;;
-	*)
-		num=${1%?}
-		suffix=${1#"${num}"}
-		;;
+		*[0-9a-zA-Z][Bb]) input=${1%?} ;;
+		*) input=$1 ;;
+	esac
+
+	case "$input" in
+	*[Kk][Ii]) num=${input%??}; suffix=ki ;;
+	*[Mm][Ii]) num=${input%??}; suffix=mi ;;
+	*[Gg][Ii]) num=${input%??}; suffix=gi ;;
+	*[Tt][Ii]) num=${input%??}; suffix=ti ;;
+	*[Pp][Ii]) num=${input%??}; suffix=pi ;;
+	*[Ee][Ii]) num=${input%??}; suffix=ei ;;
+	*) num=${input%?}; suffix=${input#"${num}"} ;;
 	esac
 
 	case "$suffix" in
-	[bB]) result="${num}x${NANO_SECTOR_SIZE}" ;;
-	[kK]) result="${num}x1000" ;;
-	[mM]) result="${num}x1000x1000" ;;
-	[gG]) result="${num}x1000x1000x1000" ;;
-	[tT]) result="${num}x1000x1000x1000x1000" ;;
-	ki) result="${num}x1024" ;;
-	mi) result="${num}x1024x1024" ;;
-	gi) result="${num}x1024x1024x1024" ;;
-	ti) result="${num}x1024x1024x1024x1024" ;;
+	[kK]) result="${num}x1000^1" ;;
+	[mM]) result="${num}x1000^2" ;;
+	[gG]) result="${num}x1000^3" ;;
+	[tT]) result="${num}x1000^4" ;;
+	[pP]) result="${num}x1000^5" ;;
+	[eE]) result="${num}x1000^6" ;;
+	ki) result="${num}x1024^1" ;;
+	mi) result="${num}x1024^2" ;;
+	gi) result="${num}x1024^3" ;;
+	ti) result="${num}x1024^4" ;;
+	pi) result="${num}x1024^5" ;;
+	ei) result="${num}x1024^6" ;;
+	[sS]) result="${num}x${NANO_SECTOR_SIZE:-512}" ;;
 	[wW]) result="${num}x4" ;;	# sizeof(int)
-	[0-9]) result="$1" ;;
+	[0-9]) result="$input" ;;
 	*) err "'$1': illegal number" ;;
 	esac
 
@@ -1777,16 +1775,14 @@ set_defaults_and_export() {
 		NANO_METALOG=${NANO_OBJ}/_.metalog
 	fi
 
-	# Size conversion
+	#
+	# Keep legacy sizes in 512-byte sectors, except for variables
+	# in this file, which require sizes in bytes
+	#
 	if [ "$NANO_PLAN" = "legacy" ]; then
-		NANO_MEDIASIZE=$(strtobytes "${NANO_MEDIASIZE:-0}b")
-		NANO_CODESIZE=$(strtobytes "${NANO_CODESIZE:-0}b")
-		NANO_CONFSIZE=$(strtobytes "${NANO_CONFSIZE:-2048}b")
-		NANO_DATASIZE=$(strtobytes "${NANO_DATASIZE:-0}b")
-		NANO_RAM_ETCSIZE=$(strtobytes "${NANO_RAM_ETCSIZE:-0}b")
-		NANO_RAM_TMPVARSIZE=$(strtobytes "${NANO_RAM_TMPVARSIZE:-0}b")
+		NANO_RAM_ETCSIZE=$(strtobytes "${NANO_RAM_ETCSIZE:-0}s")
+		NANO_RAM_TMPVARSIZE=$(strtobytes "${NANO_RAM_TMPVARSIZE:-0}s")
 		NANO_SWAP_SIZE=0
-		NANO_EFI_BOOTPART_SIZE=0
 	else
 		NANO_MEDIASIZE=$(strtobytes "${NANO_MEDIASIZE:-0}")
 		NANO_CODESIZE=$(strtobytes "${NANO_CODESIZE:-0}")
