@@ -147,6 +147,22 @@ tgt_write_fstab() {
 	fi
 
 	tgt_touch etc/fstab
+
+	# Protect immutable partitions (mode 0440 blocks non-root writes):
+	#   efiboot0       - ESP carrying gptboot.efi, written once
+	#   ${NANO_BACKUP} - permanent golden root, never updated
+	if is_boot_type UEFI; then
+		printf 'perm\tgpt/efiboot0\t0440\n' >> etc/devfs.conf
+	fi
+	if [ -n "${NANO_BACKUP}" ]; then
+		printf 'perm\tgpt/%s\t0440\n' "${NANO_BACKUP}" >> etc/devfs.conf
+	fi
+	if is_boot_type UEFI || [ -n "${NANO_BACKUP}" ]; then
+		if [ -z "$NANO_NOPKGBASE" ]; then
+			tgt_pkg_update_file_sha256 etc/devfs.conf
+			tgt_pkg_update_config_files_content etc/devfs.conf
+		fi
+	fi
 	)
 }
 
@@ -378,6 +394,12 @@ calculate_partitioning() {
 		} else {
 			# (rounded up)
 			code_sects = roundup(code_sects)
+		}
+
+		if (code_sects <= 0) {
+			print "Media too small: no room for code" \
+			    " partitions after boot/cfg/data" > "/dev/stderr"
+			exit 2
 		}
 
 		# First code partition
