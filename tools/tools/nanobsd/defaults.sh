@@ -1783,7 +1783,24 @@ export_var() {
 	export $1
 }
 
-# Call this function to set defaults _after_ parsing options.
+#
+# Anchor a path variable to NANO_SRC if it does not resolve as-is, then
+# absolutize it so it survives later cd's away from the invocation directory
+# Input: $1 = variable name, $2 = test operator (-d or -f)
+#
+anchor_path() {
+	var=$1
+	tst=$2
+	eval val=\$$var
+	[ -n "$val" ] || return 0
+	if [ ! $tst "$val" ] && [ $tst "${NANO_SRC}/$val" ]; then
+		val="${NANO_SRC}/$val"
+	fi
+	[ $tst "$val" ] && val="$(realpath "$val")" || true
+	eval $var=\"\$val\"
+}
+
+# Call this function to set defaults _after_ parsing options
 set_defaults_and_export() {
 	: ${NANO_OBJ:=/usr/obj/nanobsd.${NANO_NAME}${NANO_LAYOUT:+.${NANO_LAYOUT}}}
 	: ${MAKEOBJDIRPREFIX:=${NANO_OBJ}}
@@ -1801,8 +1818,9 @@ set_defaults_and_export() {
 	NANO_MAKE_CONF_INSTALL=${NANO_OBJ}/make.conf.install
 
 	# Set a default NANO_TOOLS to NANO_SRC/NANO_TOOLS if it exists.
-	[ ! -d "${NANO_TOOLS}" ] && [ -d "${NANO_SRC}/${NANO_TOOLS}" ] && \
-		NANO_TOOLS="${NANO_SRC}/${NANO_TOOLS}" || true
+	anchor_path NANO_TOOLS -d
+	anchor_path NANO_CUST_FILESDIR -d
+	anchor_path NANO_CUST_FILES_MTREE -f
 
 	if [ -n "${NANO_NOPRIV_BUILD}" ] && [ -z "${NANO_METALOG}" ]; then
 		NANO_METALOG=${NANO_OBJ}/_.metalog
