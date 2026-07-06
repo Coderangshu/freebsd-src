@@ -362,6 +362,11 @@ calculate_partitioning() {
 			code_sects = roundup(code_sects)
 		}
 
+		if (code_sects <= 0) {
+			print "Media too small for code partitions" > "/dev/stderr"
+			exit 2
+		}
+
 		# First code partition
 		print_line("freebsd-ufs", code_sects, $11)
 
