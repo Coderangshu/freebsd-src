@@ -228,8 +228,13 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
-if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-	nano_fetch_pkgbase_packages
+if [ -z "$NANO_NOPKGBASE" ]; then
+	if $do_precompiled; then
+		nano_fetch_pkgbase_packages
+	else
+		build_packages
+		nano_setup_local_pkg_repo
+	fi
 	if ! $do_root; then
 		nano_pkgbase_reset_metalog
 	fi
@@ -242,7 +247,7 @@ fi
 
 if $do_installworld; then
 	clean_world
-	if $do_precompiled; then
+	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
 		install_precompiled_world
 	else
 		make_conf_install
@@ -260,7 +265,7 @@ if ${do_prep_image}; then
 	setup_nanobsd_etc
 fi
 if $do_installkernel; then
-	if $do_precompiled; then
+	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
 		install_precompiled_kernel
 	else
 		install_kernel
