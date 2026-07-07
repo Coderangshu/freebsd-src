@@ -413,7 +413,7 @@ nano_distset_metalog() {
 NANO_NOPKGBASE=
 
 NANO_ABI=$(pkg config ABI)
-NANO_OSVERSION=$(pkg config OSVERSION)
+NANO_OSVERSION=
 NANO_PKGBASE_DIR="base_latest"
 NANO_KMODS_DIR="kmods_latest"
 NANO_PORTS_DIR="latest"
@@ -570,13 +570,25 @@ tgt_pkg_time_timestamp() {
 	tgt_pkg shell "UPDATE packages SET time = ${NANO_TIMESTAMP};"
 }
 
+# Return NANO_OSVERSION, or an OSVERSION consistent with NANO_ABI
+nano_pkg_osversion() {
+	local major
+
+	if [ -n "$NANO_OSVERSION" ]; then
+		echo "$NANO_OSVERSION"
+		return
+	fi
+	major=${NANO_ABI#*:}
+	echo $(( ${major%%:*} * 100000 ))
+}
+
 # Run pkg(8) with the configured ABI, repo, and cache settings
 pkg_cmd() {
 	pkg --repo-conf-dir "$(nano_pkg_repos_dir)" \
 	    -o ABI="$NANO_ABI" \
 	    -o ASSUME_ALWAYS_YES=yes \
 	    -o IGNORE_OSVERSION=yes \
-	    -o OSVERSION="$NANO_OSVERSION" \
+	    -o OSVERSION="$(nano_pkg_osversion)" \
 	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" \
 	    -o PKG_DBDIR="${NANO_WORLDDIR}/var/db/pkg" \
 	    "$@"
@@ -602,7 +614,7 @@ tgt_pkg_chroot() {
 	    -o ABI="$NANO_ABI" \
 	    -o ASSUME_ALWAYS_YES=yes \
 	    -o IGNORE_OSVERSION=yes \
-	    -o OSVERSION="$NANO_OSVERSION" \
+	    -o OSVERSION="$(nano_pkg_osversion)" \
 	    "$@"
 }
 
@@ -640,6 +652,18 @@ nano_pkg_repos_dir() {
 # XXXJL try setting CONSERVATIVE_UPGRADE=no on the builder,
 # if it fails, we must set it explicitly in pkg_cmd
 nano_pkg_repo_conf() {
+	local base_keys
+
+	# Versioned pkgbase release repos are signed with their own keys
+	case "${NANO_PKGBASE_DIR}" in
+	base_release_*)
+		base_keys="/usr/share/keys/pkgbase-${NANO_REVISION%%.*}"
+		;;
+	*)
+		base_keys="/usr/share/keys/pkg"
+		;;
+	esac
+
 	rm -rf "$(nano_pkg_repos_dir)"
 	mkdir -p "$(nano_pkg_repos_dir)"
 	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
@@ -661,7 +685,7 @@ FreeBSD-base: {
   url: "pkg+https://pkg.freebsd.org/\${ABI}/${NANO_PKGBASE_DIR}",
   mirror_type: "srv",
   signature_type: "fingerprints",
-  fingerprints: "/usr/share/keys/pkg",
+  fingerprints: "${base_keys}",
   enabled: yes
 }
 EOF
