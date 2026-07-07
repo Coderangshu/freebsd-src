@@ -1359,6 +1359,8 @@ setup_nanobsd() {
 	# Put /tmp on the /var ramdisk
 	tgt_dir2symlink tmp var/tmp 1777
 
+	rm -rf var/db/pkg/repos/*
+
 	if [ -n "$NANO_METALOG" ]; then
 		_xxx_pkg_add_var_db_files_to_metalog
 	fi
