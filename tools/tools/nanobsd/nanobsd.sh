@@ -232,12 +232,12 @@ if [ -z "$NANO_NOPKGBASE" ]; then
 		build_packages
 		nano_setup_local_pkg_repo
 	fi
-	if ! $do_root; then
+	if [ -n "${NANO_METALOG}" ]; then
 		nano_pkgbase_reset_metalog
 	fi
 else
 	nano_fetch_distsets
-	if ! $do_root; then
+	if [ -n "${NANO_METALOG}" ]; then
 		nano_distset_metalog
 	fi
 fi
