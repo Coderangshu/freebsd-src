@@ -26,8 +26,11 @@
 #
 #
 
-# Poudriere-compatible package list
+# Poudriere-compatible package list (used by the legacy plan)
 NANO_PACKAGE_LIST=""
+
+# Path to a package list file, one ports origin or package name per line
+NANO_PKGLIST=""
 
 # where package metadata gets placed
 NANO_PKG_META_BASE=/var/db
@@ -108,43 +111,114 @@ cust_install_files() {
 }
 
 #######################################################################
-# Install packages from ${NANO_PACKAGE_DIR}
+# Install packages from ${NANO_PACKAGE_DIR} or the online pkg repo
 
-# Install packages listed in NANO_PACKAGE_LIST from NANO_PACKAGE_DIR
+#
+# Install the packages listed in the NANO_PKGLIST file plus their
+# dependencies. Two sources:
+#   - NANO_PACKAGE_DIR set: a directory of pre-built packages (e.g. a
+#     poudriere All/ directory). It must contain every listed package
+#     and all of their dependencies; missing packages abort the build.
+#   - NANO_PACKAGE_DIR unset: packages are downloaded from the online
+#     FreeBSD-ports repository into the local cache and installed.
+#
 cust_pkgng() {
+	local pkgs
+
 	if ! $do_root && [ -n "$NANO_NOPRIV_BUILD" ]; then
 		pprint 2 'Skipping "cust_pkgng" (unprivileged builds not supported yet)'
 		return 0
 	fi
 
-	mkdir -p "${NANO_WORLDDIR}/var/cache/pkg"
-
-	if [ -z "$NANO_PACKAGE_LIST" ]; then
-		err "NANO_PACKAGE_LIST not set."
+	if [ -z "$NANO_PKGLIST" ]; then
+		err "NANO_PKGLIST must be set when using cust_pkgng"
 	fi
-	NANO_PACKAGE_LIST="ports-mgmt/pkg ${NANO_PACKAGE_LIST}"
+	if [ ! -f "$NANO_PKGLIST" ]; then
+		err "NANO_PKGLIST file not found: '${NANO_PKGLIST}'"
+	fi
 
-	if [ -d "$NANO_PACKAGE_DIR" ]; then
-		mount -t nullfs -o noatime -o ro "$NANO_PACKAGE_DIR" "${NANO_WORLDDIR}/var/cache/pkg"
-		trap "nano_umount ${NANO_WORLDDIR}/var/cache/pkg" 1 2 15 EXIT
+	pkgs="ports-mgmt/pkg $(sed -e 's/#.*//' "$NANO_PKGLIST" | xargs)"
+
+	if [ -n "$NANO_PACKAGE_DIR" ]; then
+		cust_pkgng_local_dir $pkgs
 	else
-		# Download precompiled into nano_pkg_cachedir
-		if $do_clean; then
-			tgt_pkg install -F $NANO_PACKAGE_LIST
-		fi
-		mount -t nullfs -o noatime -o ro "$(nano_pkg_cachedir)" "${NANO_WORLDDIR}/var/cache/pkg"
-		trap "nano_umount ${NANO_WORLDDIR}/var/cache/pkg" 1 2 15 EXIT
+		cust_pkgng_online $pkgs
 	fi
 
-	cp /etc/resolv.conf "${NANO_WORLDDIR}/etc/resolv.conf"
-	tgt_pkg_chroot install $NANO_PACKAGE_LIST
-	rm -f "${NANO_WORLDDIR}/etc/resolv.conf"
 	rm -rf "${NANO_WORLDDIR}/var/db/pkg/repos/"*
+}
 
-	if [ -d "$NANO_PACKAGE_DIR" ]; then
-		trap - 1 2 15 EXIT
-		nano_umount "${NANO_WORLDDIR}/var/cache/pkg"
+#
+# Verify that every requested package and all of their dependencies are
+# present in NANO_PACKAGE_DIR, then install from there.
+# Input: $@ = package list
+#
+cust_pkgng_local_dir() {
+	local pkgfile repodir
+
+	if [ ! -d "$NANO_PACKAGE_DIR" ]; then
+		err "NANO_PACKAGE_DIR is not a directory: '${NANO_PACKAGE_DIR}'"
 	fi
+
+	repodir="${NANO_OBJ}/_.pkgdir-repo"
+	rm -rf "$repodir"
+	mkdir -p "$repodir"
+	for pkgfile in "${NANO_PACKAGE_DIR}"/*.pkg "${NANO_PACKAGE_DIR}"/*.txz; do
+		[ -f "$pkgfile" ] && ln -sf "$pkgfile" "$repodir/"
+	done
+	pkg_cmd repo "$repodir"
+
+	cat > "$(nano_pkg_repos_dir)/NanoBSD-pkgdir.conf" <<EOF
+NanoBSD-pkgdir: {
+  url: "file://${repodir}",
+  enabled: yes
+}
+EOF
+	tgt_pkg update -r NanoBSD-pkgdir
+
+	if ! tgt_pkg install -n -r NanoBSD-pkgdir "$@" \
+	    > "${NANO_OBJ}/_.pkgdir-check" 2>&1; then
+		cat "${NANO_OBJ}/_.pkgdir-check" >&2
+		err "NANO_PACKAGE_DIR '${NANO_PACKAGE_DIR}' is missing packages" \
+		    "or dependencies (see above)."
+	fi
+	rm -f "$(nano_pkg_repos_dir)/NanoBSD-pkgdir.conf"
+
+	# Install via --chroot so file permissions are applied correctly
+	# see https://github.com/freebsd/pkg/issues/2714
+	mount -t nullfs -o noatime -o ro "$repodir" "${NANO_WORLDDIR}/var/cache/pkg"
+	trap "nano_umount ${NANO_WORLDDIR}/var/cache/pkg" 1 2 15 EXIT
+	cat > "${NANO_WORLDDIR}/etc/pkg/NanoBSD-pkgdir.conf" <<EOF
+NanoBSD-pkgdir: {
+  url: "file:///var/cache/pkg",
+  enabled: yes
+}
+EOF
+	cp /etc/resolv.conf "${NANO_WORLDDIR}/etc/resolv.conf"
+	tgt_pkg_chroot install -U -r NanoBSD-pkgdir "$@"
+	rm -f "${NANO_WORLDDIR}/etc/resolv.conf" \
+	    "${NANO_WORLDDIR}/etc/pkg/NanoBSD-pkgdir.conf"
+	trap - 1 2 15 EXIT
+	nano_umount "${NANO_WORLDDIR}/var/cache/pkg"
+}
+
+#
+# Download the requested packages and their dependencies from the online
+# FreeBSD-ports repository into the local cache and install them.
+# Input: $@ = package list
+#
+cust_pkgng_online() {
+	if $do_clean; then
+		tgt_pkg install -F "$@"
+	fi
+
+	mount -t nullfs -o noatime -o ro "$(nano_pkg_cachedir)" "${NANO_WORLDDIR}/var/cache/pkg"
+	trap "nano_umount ${NANO_WORLDDIR}/var/cache/pkg" 1 2 15 EXIT
+	cp /etc/resolv.conf "${NANO_WORLDDIR}/etc/resolv.conf"
+	tgt_pkg_chroot install "$@"
+	rm -f "${NANO_WORLDDIR}/etc/resolv.conf"
+	trap - 1 2 15 EXIT
+	nano_umount "${NANO_WORLDDIR}/var/cache/pkg"
 }
 
 #######################################################################
