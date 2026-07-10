@@ -801,9 +801,10 @@ nano_setup_local_pkg_repo() {
 	(
 	nano_pkgbase_validate
 
-	if [ ! -d "$(nano_pkg_cachedir)" ]; then
-		err "No locally built packages in $(nano_pkg_cachedir). Run without -b, or ensure a prior build populated the cache."
+	if [ ! -d "$(nano_pkg_cachedir base)" ]; then
+		err "No locally built packages in $(nano_pkg_cachedir base). Run without -b, or ensure a prior build populated the cache."
 	fi
+	mkdir -p "$(nano_pkg_cachedir ports)"
 	nano_pkg_freebsd_repo_keys
 	nano_pkg_repo_conf
 	tgt_pkg update -r FreeBSD-ports
@@ -1132,7 +1133,7 @@ make_conf_install() {
 
 # Run "make installworld" using the build make.conf
 install_world() {
-	pprint 2 "installworld"
+	pprint 2 "install world"
 	pprint 3 "log: ${NANO_LOG}/_.iw"
 
 	(
@@ -1147,8 +1148,14 @@ install_world() {
 # Install the world from pkgbase packages or distribution tarballs
 # instead of building from source
 #
-install_precompiled_world() {
-	pprint 2 "install precompiled world"
+install_binary_world() {
+	if [ -n "$NANO_NOPKGBASE" ]; then
+		pprint 2 "install world (distribution sets)"
+	elif $do_precompiled; then
+		pprint 2 "install world (fetched pkgbase packages)"
+	else
+		pprint 2 "install world (locally built pkgbase packages)"
+	fi
 	pprint 3 "log: ${NANO_LOG}/_.iw"
 
 	(
@@ -1179,18 +1186,26 @@ install_precompiled_world() {
 }
 
 #
-# Run "make distribution" to populate /etc in NANO_WORLDDIR
-# and create an empty make.conf
+# Populate /etc and create make.conf; skip for precompiled worlds, which
+# build nothing against the tree.
 #
 install_etc() {
+	if $do_precompiled; then
+		pprint 2 "skip /etc setup for precompiled"
+		return
+	fi
 	pprint 2 "install /etc"
 	pprint 3 "log: ${NANO_LOG}/_.etc"
 
 	(
-	nano_make_install_env
 	set -o xtrace
-	cd "${NANO_SRC}"
-	${NANO_MAKE} distribution DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes
+	if [ -n "$NANO_NOPKGBASE" ]; then
+		nano_make_install_env
+		cd "${NANO_SRC}"
+		${NANO_MAKE} distribution DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes
+	else
+		_xxx_add_sys_symlink
+	fi
 	# make.conf doesn't get created by default, but some ports need it
 	# so they can spam it.
 	cp /dev/null "${NANO_WORLDDIR}"/etc/make.conf
@@ -1222,9 +1237,15 @@ install_kernel() {
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
-# Install a precompiled kernel from pkgbase packages or distribution tarballs
-install_precompiled_kernel() {
-	pprint 2 "install precompiled kernel (${NANO_KERNEL})"
+# Install a kernel from pkgbase packages or distribution tarballs
+install_binary_kernel() {
+	if [ -n "$NANO_NOPKGBASE" ]; then
+		pprint 2 "install kernel (distribution sets)"
+	elif $do_precompiled; then
+		pprint 2 "install kernel (fetched pkgbase packages)"
+	else
+		pprint 2 "install kernel (locally built pkgbase packages)"
+	fi
 	pprint 3 "log: ${NANO_LOG}/_.ik"
 
 	(
