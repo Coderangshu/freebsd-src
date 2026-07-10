@@ -245,12 +245,12 @@ fi
 if $do_installworld; then
 	clean_world
 	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
-		install_precompiled_world
+		install_binary_world
 	else
 		make_conf_install
 		install_world
-		install_etc
 	fi
+	install_etc
 else
 	pprint 2 "Skipping installworld (as instructed)"
 fi
@@ -263,7 +263,7 @@ if ${do_prep_image}; then
 fi
 if $do_installkernel; then
 	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
-		install_precompiled_kernel
+		install_binary_kernel
 	else
 		install_kernel
 	fi
