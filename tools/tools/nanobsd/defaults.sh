@@ -648,7 +648,7 @@ nano_pkg_freebsd_repo_keys() {
 	(
 	cd "${NANO_SRC}/share/keys"
 	find . ! -name "Makefile*" |
-	    cpio ${CPIO_SYMLINK} -dumpv "${NANO_WORLDDIR}/usr/share/keys"
+	    cpio ${CPIO_SYMLINK} -R "${NANO_DEF_UNAME}:${NANO_DEF_GNAME}" -dumpv "${NANO_WORLDDIR}/usr/share/keys"
 	)
 }
 
@@ -1208,7 +1208,7 @@ install_etc() {
 	fi
 	# make.conf doesn't get created by default, but some ports need it
 	# so they can spam it.
-	cp /dev/null "${NANO_WORLDDIR}"/etc/make.conf
+	tgt_touch "./etc/make.conf"
 	) > ${NANO_LOG}/_.etc 2>&1
 }
 
@@ -1854,6 +1854,7 @@ set_defaults_and_export() {
 	: ${NANO_DISKIMGDIR:=${NANO_OBJ}}
 	: ${NANO_WORLDDIR:=${NANO_OBJ}/_.w}
 	: ${NANO_LOG:=${NANO_OBJ}}
+	: ${NANO_METALOG:=${NANO_OBJ}/_.metalog}
 	: ${NANO_PMAKE:="${NANO_MAKE} -j ${NANO_NCPU}"}
 	if ! $do_clean; then
 		NANO_PMAKE="${NANO_PMAKE} -DNO_CLEAN"
@@ -1868,10 +1869,6 @@ set_defaults_and_export() {
 	anchor_path NANO_TOOLS -d
 	anchor_path NANO_CUST_FILESDIR -d
 	anchor_path NANO_CUST_FILES_MTREE -f
-
-	if [ -n "${NANO_NOPRIV_BUILD}" ] && [ -z "${NANO_METALOG}" ]; then
-		NANO_METALOG=${NANO_OBJ}/_.metalog
-	fi
 
 	# Adjust pkgbase kernel names
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
