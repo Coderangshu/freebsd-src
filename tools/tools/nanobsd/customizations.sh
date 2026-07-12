@@ -97,12 +97,13 @@ cust_install_files() {
 	    cpio ${CPIO_SYMLINK} -Ldumpv "$NANO_WORLDDIR"
 
 	if [ -n "$NANO_CUST_FILES_MTREE" ] && [ -f "$NANO_CUST_FILES_MTREE" ]; then
-		if [ -n "$NANO_NOPRIV_BUILD" ]; then
+		if $do_root; then
+			CR "mtree -eiU -p /" <"$NANO_CUST_FILES_MTREE"
+		fi
+		if [ -n "$NANO_METALOG" ]; then
 			# Entries in NANO_CUST_FILES_MTREE must precede NANO_METALOG
 			cat "$NANO_CUST_FILES_MTREE" "$NANO_METALOG" > "${NANO_METALOG}.tmp"
 			mv "${NANO_METALOG}.tmp" "$NANO_METALOG"
-		else
-			CR "mtree -eiU -p /" <"$NANO_CUST_FILES_MTREE"
 		fi
 	else
 		tgt_touch $(find * -type f)
