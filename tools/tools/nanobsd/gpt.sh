@@ -59,6 +59,8 @@ fi
 
 NANO_BOOTLOADER="boot/gptboot"
 
+NANO_ALIGN="${NANO_ALIGN:-1MiB}"
+
 # Create the /etc/fstab file
 tgt_write_fstab() {
 	(
@@ -187,12 +189,13 @@ make_esp_partition() {
 }
 
 #
-# Calculate partition sizes aligned at 1 MiB boundaries.
+# Calculate partition sizes aligned at NANO_ALIGN boundaries.
 # All sizes are in bytes.
 # The output is compatible with gpart restore
 #
 calculate_partitioning() {
-	local boot_sects boot_size boot_type esp_sects
+	local align boot_sects boot_size boot_type esp_sects
+	align=$(strtobytes "$NANO_ALIGN")
 	boot_sects=0
 	boot_size=0
 	boot_type=0
@@ -209,8 +212,8 @@ calculate_partitioning() {
 	echo "$NANO_MEDIASIZE" "$NANO_IMAGES" "$NANO_SECTOR_SIZE" \
 	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
 	    "$boot_sects" "$esp_sects" "$NANO_SWAP_SIZE" "$NANO_ROOT" \
-	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" |
-	    awk '
+	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
+	    "$align" | awk '
 	function roundup(sects) {
 		return int((sects + align - 1) / align) * align
 	}
@@ -237,8 +240,8 @@ calculate_partitioning() {
 		# Media size in sectors
 		media_sects = int($1 / ssize)
 
-		# Align to a 1 MiB boundary in sectors
-		align = int((1024 * 1024) / ssize)
+		# Align to a NANO_ALIGN boundary in sectors
+		align = int($15 / ssize)
 
 		# GPT backup metadata at the end of the disk in sectors
 		# (128 entries x 128 bytes + 1 header sector)
@@ -276,7 +279,7 @@ calculate_partitioning() {
 			print_line("freebsd-boot", boot_sects, "gptboot0")
 		}
 
-		# Starting sector (1 MiB aligned)
+		# Starting sector (NANO_ALIGN boundary in sectors)
 		avail_sects -= (align - sstart)
 		sstart = align
 
@@ -357,13 +360,17 @@ create_diskimage() {
 	pprint 3 "log: ${NANO_OBJ}/_.di"
 
 	(
-	local IMG code_sects code_size
+	local IMG code_sects code_size cfg_sects cfg_size data_sects data_size
 	local bootcode cfg data efiboot0 gptboot0 swap0
 	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" # XXXJL NANO_ALTROOT
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
 	code_size=$(( code_sects * NANO_SECTOR_SIZE ))
+	cfg_sects=$(awk '$5 == "cfg" {print $4}' "${NANO_LOG}/_.partitioning")
+	cfg_size=$(( cfg_sects * NANO_SECTOR_SIZE ))
+	data_sects=$(awk '$5 == "data" {print $4}' "${NANO_LOG}/_.partitioning")
+	data_size=$(( data_sects * NANO_SECTOR_SIZE ))
 
 	# Build mkimg partition entries
 	if [ -f "${NANO_WORLDDIR}/boot/pmbr" ]; then
@@ -427,13 +434,13 @@ create_diskimage() {
 
 	# Create cfg partition
 	populate_cfg_part "${NANO_OBJ}/_.cfg.image" \
-	    "$NANO_CFGDIR" "$NANO_PARTITION_CFG" "$NANO_CONFSIZE" \
+	    "$NANO_CFGDIR" "$NANO_PARTITION_CFG" "$cfg_size" \
 	    "$NANO_METALOG_CFG"
 
 	# Create data partition (if any)
 	if [ "${NANO_DATASIZE}" -ne 0 ]; then
 		populate_data_part "${NANO_OBJ}/_.data.image" \
-		    "$NANO_DATADIR" "$NANO_PARTITION_DATA" "$DATA_SIZE" \
+		    "$NANO_DATADIR" "$NANO_PARTITION_DATA" "$data_size" \
 		    "$NANO_METALOG_DATA"
 	fi
 
