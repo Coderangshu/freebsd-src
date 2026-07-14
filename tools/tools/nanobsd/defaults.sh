@@ -678,6 +678,8 @@ nano_pkg_disable_repos() {
 	(
 	cd "$NANO_WORLDDIR"
 
+	rm -rf var/db/pkg/repos/FreeBSD-local
+
 	# XXXJL is it better to just rewrite the entire file?
 	sed -i "" -E \
 	    -e "s/([[:space:]]*enabled[[:space:]]*:[[:space:]]*)(yes|true|on)/\1no/" \
