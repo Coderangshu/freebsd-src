@@ -76,6 +76,8 @@ tgt_write_fstab() {
 		printf_fstab "/dev/gpt/efiboot0" /boot/efi msdosfs rw,noauto 2 2
 	fi
 	printf_fstab "/dev/gpt/${NANO_ROOT}" / ufs ro 1 1
+	# XXXJL We cannot mount to /${NANO_PARTITION_CFG} unless we save this
+	# variable under /etc/nanobsd.conf and adjust the scripts.  Should we do that?
 	printf_fstab /dev/gpt/${NANO_PARTITION_CFG} /cfg ufs rw,noauto 2 2
 	if [ "$NANO_SWAP_SIZE" -gt 0 ]; then
 		if [ -n "$NANO_SWAP_ENCRYPTION" ]; then
@@ -83,6 +85,9 @@ tgt_write_fstab() {
 		else
 			printf_fstab "/dev/gpt/swap0" none swap sw 0 0
 		fi
+	fi
+	if [ "$NANO_DATASIZE" -ne 0 ]; then
+		printf_fstab /dev/gpt/${NANO_PARTITION_DATA} /${NANO_PARTITION_DATA} ufs rw,noauto 2 2
 	fi
 
 	tgt_touch etc/fstab
