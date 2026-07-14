@@ -109,6 +109,17 @@ NANO_BOOTLOADER="boot/boot0sio"
 # Size of the /tmp+/var ramdisk in 512 bytes sectors
 NANO_RAM_TMPVARSIZE=10240
 
+# Path to the files directory used by cust_install_files()
+NANO_CUST_FILESDIR="${NANO_TOOLS}/Files"
+
+#
+# Path to mtree file to apply to anything copied by cust_install_files().
+# If you specify this, the mtree file *must* have an entry for every file and
+# directory located in Files
+#
+NANO_CUST_FILES_MTREE=""
+
+
 # Where cust_pkgng() finds packages to install
 NANO_PACKAGE_DIR=${NANO_SRC}/${NANO_TOOLS}/Pkg
 NANO_PACKAGE_LIST="*"

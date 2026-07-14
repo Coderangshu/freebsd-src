@@ -33,14 +33,14 @@ NANO_PACKAGE_LIST=""
 NANO_PKG_META_BASE=/var/db
 
 # Path to the files directory used by cust_install_files()
-NANO_CUST_FILESDIR="${NANO_TOOLS}/Files"
+NANO_CUST_FILESDIR="${NANO_TOOLS}/defaults/Files"
 
 #
 # Path to mtree file to apply to anything copied by cust_install_files().
 # If you specify this, the mtree file *must* have an entry for every file and
 # directory located in Files
 #
-#NANO_CUST_FILES_MTREE=""
+NANO_CUST_FILES_MTREE="${NANO_TOOLS}/defaults/Files.mtree"
 
 #
 # boot2 flags/options.
@@ -84,9 +84,9 @@ cust_allow_ssh_root() {
 }
 
 #######################################################################
-# Install the stuff under ./Files
+# Install the stuff under NANO_CUST_FILESDIR
 
-# Copy all files from NANO_TOOLS/Files into NANO_WORLDDIR
+# Copy all files from NANO_CUST_FILESDIR into NANO_WORLDDIR
 cust_install_files() {
 	(
 	cd "$NANO_CUST_FILESDIR"
