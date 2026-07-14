@@ -129,55 +129,39 @@ is_boot_type() {
 	esac
 }
 
-#
 # Create a FreeBSD Boot Partition image file of 512 KiB
-# Input: $1 = label
-#
 make_boot_partition() {
-	local bootcode name
+	local bootcode
 
-	name="$1"
 	bootcode="${NANO_WORLDDIR}/${NANO_BOOTLOADER}"
 
 	if [ ! -f "$bootcode" ]; then
 		echo "Image will not be bootable"
 	else
-		cp -p "$bootcode" "${NANO_OBJ}/_.${name}.image"
-		truncate -s 512k "${NANO_OBJ}/_.${name}.image"
+		cp -p "$bootcode" "${NANO_OBJ}/_.gptboot0.image"
+		truncate -s 512k "${NANO_OBJ}/_.gptboot0.image"
 	fi
 }
 
-#
 # Create an EFI System Partition image file
-# Input: $1 = label, $2 = is the recovery ESP?
-#
 make_esp_partition() {
-	local bootcode efibootname espdir fat_size fat_type is_recovery name
+	local bootcode efibootname espdir fat_type
 
-	name="$1"
-	is_recovery="${2:-}"
-
-	FAT16MIN=2150400
-	FAT32MIN=34091008
-
-	esp_sects=$(awk -v label="$name" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
-	fat_size=$(strtobytes "${esp_sects:-0}s")
-	if [ "$fat_size" -ge "$FAT32MIN" ]; then
+	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
+	MINCLS16=4085	# minimum FAT16 clusters (0xff5U)
+	MINCLS32=65525	# minimum FAT32 clusters (0xfff5U)
+	esp_sects=$(awk '$5 == "efiboot0" {print $4}' "${NANO_LOG}/_.partitioning")
+	if [ "$esp_sects" -ge "$MINCLS32" ]; then
 		fat_type=32
-	elif [ "$fat_size" -ge "$FAT16MIN" ]; then
+	elif [ "$esp_sects" -ge "$MINCLS16" ]; then
 		fat_type=16
 	else
 		fat_type=12
 	fi
 
 	espdir="${NANO_OBJ}/_.efi"
-	rm -rf "${espdir}"
-
-	if [ "$is_recovery" = "recovery" ]; then
-		mkdir -p "${espdir}/EFI/BOOT"
-	else
-		mkdir -p "${espdir}/EFI/FreeBSD"
-	fi
+	rm -rf "$espdir"
+	mkdir -p "${espdir}/EFI/BOOT"
 
 	efibootname=$(get_uefi_bootname)
 	bootcode="${NANO_WORLDDIR}/$(get_bootcode uefi gpt)"
@@ -186,23 +170,18 @@ make_esp_partition() {
 		echo "Image will not be bootable"
 	fi
 
-	if [ "$is_recovery" = "recovery" ]; then
-		cp -p "${NANO_WORLDDIR}/boot/gptboot.efi" \
-		    "${espdir}/EFI/BOOT/${efibootname}.EFI"
-	else
-		cp -p "$bootcode" "${espdir}/EFI/FreeBSD/loader.efi"
-	fi
+	cp -p "$bootcode" "${espdir}/EFI/BOOT/${efibootname}.EFI"
 
 	makefs -t msdos \
 	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
-	    -o volume_label="$name" \
+	    -o volume_label="efiboot0" \
 	    -o OEM_string="" \
-	    -s "$fat_size" \
+	    -s "${esp_sects}b" \
 	    -T "$NANO_TIMESTAMP" \
-	    "${NANO_OBJ}/_.${name}.image" "${espdir}"
+	    "${NANO_OBJ}/_.efiboot0.image" "$espdir"
 
-	rm -rf "${espdir}"
+	rm -rf "$espdir"
 }
 
 #
@@ -421,7 +400,7 @@ create_diskimage() {
 
 	# Create ESP partition (if any)
 	if is_boot_type UEFI; then
-		make_esp_partition "efiboot0" "recovery"
+		make_esp_partition "efiboot0"
 	fi
 
 	# Swap partition must be greater than 100 MiB
@@ -478,14 +457,12 @@ create_diskimage() {
 	) > "${NANO_LOG}/_.di" 2>&1
 }
 
-# XXXJL FIXME
 tgt_switch_root_fstab() {
 	local current new
 	current="$1"
 	new="$2"
 
 	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
-		sed -i "" "s=/dev/gpt/efiboot${current}=/dev/gpt/efiboot${new}=g" "${f}"
 		sed -i "" "s=/dev/gpt/${NANO_LABEL}${current}=/dev/gpt/${NANO_LABEL}${new}=g" "${f}"
 	done
 }
