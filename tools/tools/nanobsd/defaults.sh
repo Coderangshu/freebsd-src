@@ -80,6 +80,11 @@ WITHOUT_TESTS=true
 # Kernel config file to use
 NANO_KERNEL=GENERIC
 
+# XXXJL we can get rid of this variable, however we must see how custom
+# kernels get pkgbase-configured (e.g., kernel.${NANO_KERNEL} when NANO_KERNEL
+# is not GENERIC)? Otherwise, I would prefer to handle them independently, more so
+# because FreeBSD-set-kernels installs a bunch of kernels, and having this variable
+# independently allows us to choose the one we want to boot from.
 #
 # Boot sub-directory containing kernel and modules
 # Custom kernels for pkgbase installations have names like:
@@ -1105,7 +1110,7 @@ install_kernel() {
 
 # Install a precompiled kernel from pkgbase packages or distribution tarballs
 install_precompiled_kernel() {
-	pprint 2 "install precompiled kernel (GENERIC)"
+	pprint 2 "install precompiled kernel (${NANO_KERNEL})"
 	pprint 3 "log: ${NANO_LOG}/_.ik"
 
 	(
@@ -1767,6 +1772,27 @@ set_defaults_and_export() {
 
 	if [ -n "${NANO_NOPRIV_BUILD}" ] && [ -z "${NANO_METALOG}" ]; then
 		NANO_METALOG=${NANO_OBJ}/_.metalog
+	fi
+
+	# Adjust pkgbase kernel names
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		for package in $NANO_PKGBASE_LIST; do
+			case "$package" in
+			FreeBSD-kernel-*)
+				kernel="${package#FreeBSD-kernel-generic-}"
+				case "$kernel" in
+				mmccam*)
+					NANO_KERNEL="GENERIC-MMCCAM"
+					NANO_LOADER_KERNEL="kernel.GENERIC-MMCCAM"
+					;;
+				nodebug*)
+					NANO_KERNEL="GENERIC-NODEBUG"
+					NANO_LOADER_KERNEL="kernel.GENERIC-NODEBUG"
+					;;
+				esac
+				;;
+			esac
+		done
 	fi
 
 	#
