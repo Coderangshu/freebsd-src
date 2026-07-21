@@ -5435,7 +5435,14 @@ uaudio_mixer_init_sub(struct uaudio_softc *sc, struct snd_mixer *m)
 
 	DPRINTF("child=%u\n", i);
 
-	mtx_init(&sc->sc_child[i].mixer_lock, "uaudio mixer lock", NULL, MTX_DEF);
+	/*
+	 * Initialize the mutex with MTX_RECURSE so that functions like
+	 * uaudio_mixer_ctl_set() do not panic when they recurse on the lock,
+	 * as a result of a callback function (e.g., uaudio_hid_rx_callback())
+	 * also having acquired it.
+	 */
+	mtx_init(&sc->sc_child[i].mixer_lock, "uaudio mixer lock", NULL,
+	    MTX_RECURSE);
 	sc->sc_child[i].mixer_dev = m;
 
 	if (i == 0 &&
@@ -6049,7 +6056,7 @@ umidi_attach(device_t dev)
 		error = usb_fifo_attach(sc->sc_udev, chan, &chan->mtx,
 		    &umidi_fifo_methods, &sub->fifo, unit, n,
 		    chan->iface_index,
-		    UID_ROOT, GID_OPERATOR, 0666);
+		    UID_ROOT, GID_AUDIO, 0660);
 		if (error) {
 			goto detach;
 		}
