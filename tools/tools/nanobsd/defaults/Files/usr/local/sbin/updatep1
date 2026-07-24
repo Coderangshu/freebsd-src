@@ -40,7 +40,7 @@ geom="${component%p*}"
 dd if=/dev/zero of="/dev/gpt/${NANO_ROOT}" bs=1m count=1 status=none
 
 # Copy in new system
-dd of="/dev/gpt/${NANO_ROOT}" obs=64k
+dd of="/dev/gpt/${NANO_ROOT}" bs=1m iflag=fullblock status=progress
 
 # Check that it worked
 fsck_ufs -n "/dev/gpt/${NANO_ROOT}"

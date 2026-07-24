@@ -80,6 +80,11 @@ WITHOUT_TESTS=true
 # Kernel config file to use
 NANO_KERNEL=GENERIC
 
+# XXXJL we can get rid of this variable, however we must see how custom
+# kernels get pkgbase-configured (e.g., kernel.${NANO_KERNEL} when NANO_KERNEL
+# is not GENERIC)? Otherwise, I would prefer to handle them independently, more so
+# because FreeBSD-set-kernels installs a bunch of kernels, and having this variable
+# independently allows us to choose the one we want to boot from.
 #
 # Boot sub-directory containing kernel and modules
 # Custom kernels for pkgbase installations have names like:
@@ -158,6 +163,9 @@ NANO_SWAP_ENCRYPTION=
 
 # EFI System Partition size in bytes
 NANO_EFI_BOOTPART_SIZE="260Mi"
+
+# CIDATA Partition size in bytes (nuageinit)
+NANO_CIDATA_SIZE=0
 
 # Progress Print level
 PPLEVEL=3
@@ -673,6 +681,8 @@ nano_pkg_disable_repos() {
 	(
 	cd "$NANO_WORLDDIR"
 
+	rm -rf var/db/pkg/repos/FreeBSD-local
+
 	# XXXJL is it better to just rewrite the entire file?
 	sed -i "" -E \
 	    -e "s/([[:space:]]*enabled[[:space:]]*:[[:space:]]*)(yes|true|on)/\1no/" \
@@ -1105,7 +1115,7 @@ install_kernel() {
 
 # Install a precompiled kernel from pkgbase packages or distribution tarballs
 install_precompiled_kernel() {
-	pprint 2 "install precompiled kernel (GENERIC)"
+	pprint 2 "install precompiled kernel (${NANO_KERNEL})"
 	pprint 3 "log: ${NANO_LOG}/_.ik"
 
 	(
@@ -1445,14 +1455,8 @@ get_bootcode() {
 		esac
 		;;
 	[Uu][Ee][Ff][Ii])
-		# XXXJL we want /boot/loader.efi for Primary/Secondary ESP partitions.
-		# These are supposed to be switched with efibootmgr -n.
-		# For the Recovery ESP with UFS, we want /boot/gptboot.efi,
-		# this allows us to switch using gpart set -a bootonce.
-		# For the Recovery ESP with ZFS, we want /boot/loader.efi,
-		# coupled with a bare-minimum zpool-features(7)?
 		case "$part_type" in
-		[Gg][Pp][Tt]) echo "boot/loader.efi" ;;
+		[Gg][Pp][Tt]) echo "boot/gptboot.efi" ;;
 		[Zz][Ff][Ss]) echo "boot/loader.efi" ;;
 		*) err "Unsupported UEFI partition type '${part_type}'" ;;
 		esac
@@ -1775,6 +1779,27 @@ set_defaults_and_export() {
 		NANO_METALOG=${NANO_OBJ}/_.metalog
 	fi
 
+	# Adjust pkgbase kernel names
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		for package in $NANO_PKGBASE_LIST; do
+			case "$package" in
+			FreeBSD-kernel-*)
+				kernel="${package#FreeBSD-kernel-generic-}"
+				case "$kernel" in
+				mmccam*)
+					NANO_KERNEL="GENERIC-MMCCAM"
+					NANO_LOADER_KERNEL="kernel.GENERIC-MMCCAM"
+					;;
+				nodebug*)
+					NANO_KERNEL="GENERIC-NODEBUG"
+					NANO_LOADER_KERNEL="kernel.GENERIC-NODEBUG"
+					;;
+				esac
+				;;
+			esac
+		done
+	fi
+
 	#
 	# Keep legacy sizes in 512-byte sectors, except for variables
 	# in this file, which require sizes in bytes
@@ -1791,6 +1816,7 @@ set_defaults_and_export() {
 		NANO_RAM_ETCSIZE=$(strtobytes "${NANO_RAM_ETCSIZE:-0}")
 		NANO_RAM_TMPVARSIZE=$(strtobytes "${NANO_RAM_TMPVARSIZE:-0}")
 		NANO_SWAP_SIZE=$(strtobytes "${NANO_SWAP_SIZE:-0}")
+		NANO_CIDATA_SIZE=$(strtobytes "${NANO_CIDATA_SIZE:-0}")
 		NANO_EFI_BOOTPART_SIZE=$(strtobytes "${NANO_EFI_BOOTPART_SIZE:-0}")
 	fi
 
@@ -1809,6 +1835,7 @@ set_defaults_and_export() {
 	export_var MAKEOBJDIRPREFIX
 	export_var NANO_ARCH
 	export_var NANO_BOOTLOADER
+	export_var NANO_CIDATA_SIZE
 	export_var NANO_CODESIZE
 	export_var NANO_CONFSIZE
 	export_var NANO_CUSTOMIZE

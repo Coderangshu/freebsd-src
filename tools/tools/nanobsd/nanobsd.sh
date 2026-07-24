@@ -49,12 +49,7 @@ legacy() {
 }
 
 default() {
-	# Pull in default stuff on demand
-	if [ "$NANO_PARTITION_SCHEME" = "MBR" ]; then
-		. "${topdir}/mbr.sh"
-	else
-		. "${topdir}/gpt.sh"
-	fi
+	. "${topdir}/gpt.sh"
 	NANO_PLAN="${NANO_PLAN:-default}"
 }
 
