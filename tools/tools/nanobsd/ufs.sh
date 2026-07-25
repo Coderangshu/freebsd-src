@@ -294,7 +294,7 @@ calculate_partitioning() {
 	echo "$NANO_MEDIASIZE" "$NANO_IMAGES" "$NANO_SECTOR_SIZE" \
 	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
 	    "$boot_sects" "$esp_sects" "$NANO_SWAP_SIZE" "$NANO_ROOT" \
-	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
+	    "${NANO_ALTROOT:--}" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
 	    "$align" "$cidata_sects" | awk '
 	function roundup(sects) {
 		return int((sects + align - 1) / align) * align
