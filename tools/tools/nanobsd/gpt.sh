@@ -474,7 +474,8 @@ create_diskimage() {
 	(
 	local IMG code_sects code_size cfg_sects cfg_size data_sects data_size
 	local bootcode cfg cidata data efiboot0 gptboot0 swap0
-	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" # XXXJL NANO_ALTROOT
+	local part_root part_altroot
+	local "${NANO_ROOT}" ${NANO_ALTROOT} # XXXJL NANO_ALTROOT
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
@@ -508,11 +509,13 @@ create_diskimage() {
 	done
 
 	# Use fixed variable names when dealing with code partitions
-	eval "code1=\"\$${NANO_ROOT}\""
-	eval "code2=\"\$${NANO_ALTROOT}\""
+	eval "part_root=\"\$${NANO_ROOT}\""
+	if [ -n "${NANO_ALTROOT}" ]; then
+		eval "part_altroot=\"\$${NANO_ALTROOT}\""
+	fi
 
-	# Rename code1 image name to match NANO_IMG1NAME
-	code1=$(echo "$code1" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
+	# Rename root image name to match NANO_IMG1NAME
+	part_root=$(echo "$part_root" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
 
 	# Create boot partition (if any)
 	is_boot_type BIOS && make_boot_partition
@@ -533,13 +536,13 @@ create_diskimage() {
 	if [ "$NANO_IMAGES" -gt 1 ]; then
 		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
 			echo "Duplicating to second image..."
-			tgt_switch_root_fstab 1 2
+			tgt_switch_root_fstab "${NANO_ROOT}" "${NANO_ALTROOT}"
 			nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 			    "${NANO_METALOG}" "$code_size" \
 			    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" "${NANO_WORLDDIR}"
-			tgt_switch_root_fstab 2 1
+			tgt_switch_root_fstab "${NANO_ALTROOT}" "${NANO_ROOT}"
 		else
-			code2=$(echo "$code2" |
+			part_altroot=$(echo "$part_altroot" |
 			    sed "s#=${NANO_OBJ}/_.${NANO_ALTROOT}.image#:${code_size}#")
 		fi
 	fi
@@ -564,8 +567,8 @@ create_diskimage() {
 	    ${cidata} \
 	    ${efiboot0} \
 	    ${swap0} \
-	    ${code1} \
-	    ${code2} \
+	    ${part_root} \
+	    ${part_altroot} \
 	    ${cfg} \
 	    ${data} \
 	    -o ${IMG}
@@ -580,13 +583,20 @@ create_diskimage() {
 	) > "${NANO_LOG}/_.di" 2>&1
 }
 
+#
+# Rewrite the root device in the image's fstab files from one GPT label
+# to another, used when building the alternate root image.
+# Input: $1 = current label (e.g. code1), $2 = new label (e.g. code2)
+#
 tgt_switch_root_fstab() {
-	local current new
+	local current new f
+
 	current="$1"
 	new="$2"
 
-	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
-		sed -i "" "s=/dev/gpt/${NANO_LABEL}${current}=/dev/gpt/${NANO_LABEL}${new}=g" "${f}"
+	for f in "${NANO_WORLDDIR}/etc/fstab" "${NANO_WORLDDIR}/conf/base/etc/fstab"; do
+		[ -f "${f}" ] || continue
+		sed -i "" "s=/dev/gpt/${current}=/dev/gpt/${new}=g" "${f}"
 	done
 }
 
