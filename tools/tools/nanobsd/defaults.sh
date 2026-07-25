@@ -1148,7 +1148,7 @@ install_world() {
 # Install the world from pkgbase packages or distribution tarballs
 # instead of building from source
 #
-install_binary_world() {
+install_world_binaries() {
 	if [ -n "$NANO_NOPKGBASE" ]; then
 		pprint 2 "install world (distribution sets)"
 	elif $do_precompiled; then
@@ -1238,7 +1238,7 @@ install_kernel() {
 }
 
 # Install a kernel from pkgbase packages or distribution tarballs
-install_binary_kernel() {
+install_kernel_binaries() {
 	if [ -n "$NANO_NOPKGBASE" ]; then
 		pprint 2 "install kernel (distribution sets)"
 	elif $do_precompiled; then
