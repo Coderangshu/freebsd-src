@@ -1609,7 +1609,7 @@ prune_usr() {
 # $4 = output image path, $5 = source dir
 #
 nano_makefs() {
-	local dir image metalog options size
+	local dir image image_bytes metalog options size
 	options=$1
 	metalog=$2
 	size=$3
@@ -1622,6 +1622,16 @@ nano_makefs() {
 	else
 		makefs -t ffs -Z ${options} -N "${NANO_WORLDDIR}/etc" \
 		    -R "$size" -T "$NANO_TIMESTAMP" "$image" "$dir"
+	fi
+
+	# makefs -R only rounds the image up to the requested size, on
+	# overflow it silently grows the image past it, which surfaces
+	# later as a confusing mkimg failure.
+	image_bytes=$(stat -f %z "$image")
+	if [ "$image_bytes" -gt "$size" ]; then
+		err "Image ${image} (${image_bytes} bytes) exceeds partition" \
+		    "size (${size} bytes). Increase NANO_MEDIASIZE or the" \
+		    "corresponding partition size."
 	fi
 }
 
