@@ -1,18 +1,17 @@
 #!/bin/sh
 #
-# nanobsd-tui.sh -- run nanobsd.sh inside a live scrolling TUI box.
+# nanobsd-tui.sh -- run nanobsd.sh inside a live-updating TUI box.
 #
-# ponytail: reuses bsddialog(1)/dialog(1) --prgbox to stream nanobsd.sh's
-# pprint output into a bordered, auto-scrolling window. No custom curses
-# code, no new hard dependency: falls straight through to a plain run if
-# neither tool is on $PATH. Exit code of nanobsd.sh itself is not
-# propagated through the dialog widget; add a status-file wrapper if
-# that's ever needed.
+# ponytail: reuses bsddialog(1)/dialog(1) --infobox, polled in a loop, to
+# show nanobsd.sh's pprint output. --prgbox/--programbox would be a single
+# call but bsddialog doesn't implement them; --infobox is the one widget
+# both tools support, so it's the lazy common denominator. No custom
+# curses code, no new hard dependency: falls straight through to a plain
+# run if neither tool is on $PATH.
 #
 set -eu
 
 selfdir=$(dirname "$0")
-cmd="sh ${selfdir}/nanobsd.sh $*"
 
 if command -v bsddialog >/dev/null 2>&1; then
 	dlg=bsddialog
@@ -23,5 +22,24 @@ else
 	exec sh "${selfdir}/nanobsd.sh" "$@"
 fi
 
-exec "$dlg" --title "nanobsd build" \
-    --prgbox "$cmd" "$(tput lines)" "$(tput cols)"
+log=$(mktemp -t nanobsd-tui)
+statusfile="$log.status"
+trap 'rm -f "$log" "$statusfile"' EXIT
+
+(set +e; sh "${selfdir}/nanobsd.sh" "$@" >"$log" 2>&1; echo $? >"$statusfile") &
+
+rows=$(tput lines)
+cols=$(tput cols)
+while [ ! -f "$statusfile" ]; do
+	"$dlg" --title "nanobsd build (running)" \
+	    --infobox "$(tail -n $((rows - 4)) "$log")" "$rows" "$cols"
+	sleep 1
+done
+wait
+
+status=$(cat "$statusfile")
+"$dlg" --title "nanobsd build" \
+    --msgbox "$(tail -n $((rows - 6)) "$log")
+
+exit status: $status" "$rows" "$cols"
+exit "$status"
