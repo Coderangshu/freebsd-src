@@ -646,9 +646,16 @@ nano_pkg_cachedir() {
 # Copy FreeBSD pkg signing key fingerprints from the source tree
 nano_pkg_freebsd_repo_keys() {
 	(
-	cd "${NANO_SRC}/share/keys"
-	find . ! -name "Makefile*" |
-	    cpio ${CPIO_SYMLINK} -R "${NANO_DEF_UNAME}:${NANO_DEF_GNAME}" -dumpv "${NANO_WORLDDIR}/usr/share/keys"
+	cd "${NANO_SRC}/share/keys" ||
+	    err "Directory '${NANO_SRC}/share/keys' not present"
+	if [ -n "${NANO_NOPRIV_BUILD}" ]; then
+		${NANO_MAKE} install DESTDIR="${NANO_WORLDDIR}" \
+		    NO_ROOT=1 METALOG="${NANO_METALOG}" \
+		    INSTALL="install -U -M ${NANO_METALOG} -D ${NANO_WORLDDIR}"
+		sed -i '' -e 's/ tags=[^ ]*$//' "${NANO_METALOG}"
+	else
+		${NANO_MAKE} install DESTDIR="${NANO_WORLDDIR}"
+	fi
 	)
 }
 
