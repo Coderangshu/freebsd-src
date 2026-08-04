@@ -259,8 +259,9 @@ _xxx_tgt_pkg_triggers() {
 	fi
 	if [ -n "$NANO_METALOG" ]; then
 		for mandir in usr/share/man usr/share/openssl/man; do
-			[ -f "${NANO_WORLDDIR}/${mandir}/mandoc.db" ] && \
-			    metalog_add_data "./${mandir}/mandoc.db"
+			if [ -f "${NANO_WORLDDIR}/${mandir}/mandoc.db" ]; then
+				metalog_add_data "./${mandir}/mandoc.db"
+			fi
 		done
 	fi
 }
