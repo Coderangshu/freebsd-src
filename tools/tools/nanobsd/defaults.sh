@@ -1083,6 +1083,7 @@ build_packages() {
 
 	(
 	nano_make_build_env
+	nano_make_kernel_env
 	if [ -n "${NANO_NOPRIV_BUILD}" ]; then
         # Global METALOG in NANO_MAKE_CONF_BUILD defeats
         # Makefile.inc1's per-stage METALOG, so make packages
@@ -1906,6 +1907,21 @@ set_defaults_and_export() {
 				;;
 			esac
 		done
+	fi
+
+	# Track the kernel config being built
+	if ! $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		kernel_pkg="FreeBSD-kernel-$(basename "${NANO_KERNEL}" |
+		    tr '[:upper:]' '[:lower:]')"
+		list=
+		for package in $NANO_PKGBASE_LIST; do
+			case "$package" in
+			FreeBSD-kernel-generic)
+				package="$kernel_pkg" ;;
+			esac
+			list="$list $package"
+		done
+		NANO_PKGBASE_LIST="${list# }"
 	fi
 
 	#
