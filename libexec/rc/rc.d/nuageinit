@@ -47,6 +47,7 @@ nuageinit_start()
 		unset drive
 	done
 	if [ -n "$drive" ]; then
+		checkyesno root_rw_mount || mount -uw /
 		mkdir -p /media/nuageinit
 		fs=$(fstyp $drive 2> /dev/null)
 		mount -t $fs $drive /media/nuageinit
@@ -96,6 +97,7 @@ nuageinit_start()
 	if [ -n "$drive" ]; then
 		umount /media/nuageinit
 		rmdir /media/nuageinit
+		checkyesno root_rw_mount || mount -ur /
 	else
 		rm -rf /media/nuageinit
 	fi
