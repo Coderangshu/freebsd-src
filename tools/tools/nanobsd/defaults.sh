@@ -1375,6 +1375,7 @@ setup_nanobsd_etc() {
 		echo "				# if the 'bypass_before_seeding' knob is enabled"
 		echo "				# and a request is submitted prior to initial"
 		echo "				# seeding."
+		is_defined nanobsd_loader_conf_extra && nanobsd_loader_conf_extra
 	} >> boot/defaults/loader.conf
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 444 boot/defaults/loader.conf
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
