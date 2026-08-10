@@ -138,7 +138,7 @@ is_boot_type() {
 }
 
 # Create a FreeBSD Boot Partition image file of 512 KiB
-make_boot_partition() {
+create_boot_partition() {
 	local bootcode
 
 	bootcode="${NANO_WORLDDIR}/${NANO_BOOTLOADER}"
@@ -152,7 +152,7 @@ make_boot_partition() {
 }
 
 # Create an EFI System Partition image file
-make_esp_partition() {
+create_esp_partition() {
 	local bootcode efibootname espdir esp_sects fat_type
 
 	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
@@ -195,7 +195,7 @@ make_esp_partition() {
 }
 
 # Create an MS Basic Data Partition for nuageinit (cidata)
-make_cidata_partition() {
+create_cidata_partition() {
 	local cidatadir cidata_sects fat_type
 
 	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
@@ -462,13 +462,13 @@ create_diskimage() {
 	code1=$(echo "$code1" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
 
 	# Create boot partition (if any)
-	is_boot_type BIOS && make_boot_partition
+	is_boot_type BIOS && create_boot_partition
 
 	# Create CIDATA partition (if any)
-	[ "$NANO_CIDATA_SIZE" -gt 0 ] && make_cidata_partition
+	[ "$NANO_CIDATA_SIZE" -gt 0 ] && create_cidata_partition
 
 	# Create ESP partition (if any)
-	is_boot_type UEFI && make_esp_partition
+	is_boot_type UEFI && create_esp_partition
 
 	# Swap partition must be greater than 100 MiB
 	if [ "$NANO_SWAP_SIZE" -gt 0 ] &&
