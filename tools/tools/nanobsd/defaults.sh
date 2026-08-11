@@ -762,10 +762,11 @@ nano_pkgbase_validate() {
 }
 
 #
-# Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache,
-# write the pkg repo config, and fetch pkgbase packages
+# Validate NANO_PKGBASE_LIST, write the pkg repo config. The base
+# repo is populated either by fetching from the pkgbase mirror
+# (precompiled) or by a preceding "make packages", the rest is common.
 #
-nano_fetch_pkgbase_packages() {
+nano_setup_pkg_repo() {
 	pprint 2 "configure pkg"
 	pprint 3 "log: ${NANO_LOG}/_.pkgbase"
 
@@ -776,47 +777,38 @@ nano_fetch_pkgbase_packages() {
 	(
 	nano_pkgbase_validate
 
-	if $do_clean; then
-		rm -rf "${NANO_OBJ}/_.cache"
-		rm -rf "${NANO_WORLDDIR}/var/db/pkg"
-		mkdir -p "$(nano_pkg_cachedir base)" "$(nano_pkg_cachedir ports)"
-		nano_pkg_freebsd_repo_keys
-		nano_pkg_repo_conf
-		tgt_pkg update
-		tgt_pkg -o PKG_CACHEDIR="$(nano_pkg_cachedir base)" \
-		    install -F $(nano_pkgbase_world_list) $(nano_pkgbase_kernel_list)
-		nano_pkg_repo base
-		# pkg(8) is not part of base; fetch it from the online ports
-		# repo into the ports cache so FreeBSD-local-ports can serve it
-		tgt_pkg fetch -d -r FreeBSD-ports pkg
-		nano_pkg_repo ports
-	else
-		pprint 2 "Using existing packages (as instructed)"
-	fi
-	) > "${NANO_LOG}/_.pkgbase" 2>&1
-}
+	# Write the repo config unconditionally, it embeds NANO_OBJ-derived
+	# file:// URLs, so a stale copy from a prior NANO_OBJ will not
+	# survive a "reuse existing packages" skip below.
+	nano_pkg_repo_conf
 
-# Prepare the local pkg repository for a source pkgbase build
-nano_setup_local_pkg_repo() {
-	pprint 2 "configure local pkg repo"
-	pprint 3 "log: ${NANO_LOG}/_.pkgbase"
-
-	if [ ! -d "$NANO_LOG" ]; then
-		mkdir -p "$NANO_LOG"
-	fi
-
-	(
-	nano_pkgbase_validate
-
-	if [ ! -d "$(nano_pkg_cachedir base)" ]; then
+	if $do_precompiled; then
+		if ! $do_clean; then
+			pprint 2 "Using existing packages (as instructed)"
+			exit 0
+		fi
+		rm -rf "${NANO_OBJ}/_.cache" "${NANO_WORLDDIR}/var/db/pkg"
+	elif [ ! -d "$(nano_pkg_cachedir base)" ]; then
 		err "No locally built packages in $(nano_pkg_cachedir base). Run without -b, or ensure a prior build populated the cache."
 	fi
-	mkdir -p "$(nano_pkg_cachedir ports)"
+
+	mkdir -p "$(nano_pkg_cachedir base)" "$(nano_pkg_cachedir ports)"
 	nano_pkg_freebsd_repo_keys
-	nano_pkg_repo_conf
-	tgt_pkg update -r FreeBSD-ports
+
+	if $do_precompiled; then
+		tgt_pkg update
+		tgt_pkg -o PKG_CACHEDIR="$(nano_pkg_cachedir base)" \
+		    install -F $(nano_pkgbase_world_list) \
+		    $(nano_pkgbase_kernel_list)
+		nano_pkg_repo base
+	else
+		# "make packages" already indexed the base repo
+		tgt_pkg update -r FreeBSD-ports
+	fi
+
+	# pkg is not part of base, fetch it from the online ports
 	tgt_pkg fetch -d -r FreeBSD-ports pkg
-	nano_pkg_repo
+	nano_pkg_repo ports
 	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
@@ -1916,7 +1908,7 @@ set_defaults_and_export() {
 		list=
 		for package in $NANO_PKGBASE_LIST; do
 			case "$package" in
-			FreeBSD-kernel-generic)
+			FreeBSD-kernel-* | FreeBSD-set-kernels)
 				package="$kernel_pkg" ;;
 			esac
 			list="$list $package"
