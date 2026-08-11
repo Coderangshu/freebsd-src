@@ -48,7 +48,11 @@ legacy() {
 }
 
 default() {
-	. "${topdir}/gpt.sh"
+	if [ "$NANO_FILE_SYSTEM" = "ZFS" ]; then
+		. "${topdir}/zfs.sh"
+	else
+		. "${topdir}/ufs.sh"
+	fi
 	NANO_PLAN="${NANO_PLAN:-default}"
 }
 

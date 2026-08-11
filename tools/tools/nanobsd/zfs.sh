@@ -35,15 +35,14 @@ NANO_PLAN=default
 #
 NANO_BOOT_TYPE="BIOS UEFI"
 
-# Set NANO_LABEL to non-blank to form the basis for using /dev/gpt/code
+NANO_ZFSBOOT_POOL_NAME="zroot"
+
+# Set NANO_LABEL to non-blank to form the basis for using /dev/gpt/${NANO_ROOT}
 # in preference to /dev/${NANO_DRIVE}
-# Root partition will be /dev/gpt/${NANO_ROOT, NANO_ALTROOT}
-# /cfg partition will be /dev/gpt/cfg
-# /data partition will be /dev/gpt/data
-NANO_LABEL=code
-NANO_PARTITION_ROOT=1
-NANO_PARTITION_CFG=cfg
-NANO_PARTITION_DATA=data
+# Root dataset will be ${NANO_ZFSBOOT_POOL_NAME}/ROOT/default
+NANO_LABEL=zfs
+NANO_PARTITION_ROOT=0
+NANO_PARTITION_CFG="${NANO_ZFSBOOT_POOL_NAME}/cfg"
 
 NANO_ROOT="${NANO_LABEL}${NANO_PARTITION_ROOT}"
 
@@ -57,9 +56,31 @@ if [ -z "${NANO_LABEL}" ]; then
 	err "NANO_LABEL must be defined"
 fi
 
-NANO_BOOTLOADER="boot/gptboot"
+NANO_BOOTLOADER="boot/gptzfsboot"
 
 NANO_ALIGN="${NANO_ALIGN:-1MiB}"
+
+# makefs parameters to use
+NANO_MAKEFS="-o poolname=${NANO_ZFSBOOT_POOL_NAME} \
+	-o bootfs=${NANO_ZFSBOOT_POOL_NAME}/ROOT/default \
+	-o rootpath=/ \
+	-o path=/dev/gpt/${NANO_ROOT} \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME};atime=off;compression=lz4;mountpoint=none \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/ROOT;mountpoint=none \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/ROOT/default;mountpoint=/;canmount=noauto;readonly=on \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/home;mountpoint=/home \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/tmp;mountpoint=/tmp;exec=on;setuid=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/usr;mountpoint=/usr;canmount=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/usr/ports;setuid=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/usr/src \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/usr/obj \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/var;mountpoint=/var;canmount=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/var/audit;setuid=off;exec=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/var/crash;setuid=off;exec=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/var/log;setuid=off;exec=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/var/mail;atime=on \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/var/tmp;setuid=off \
+	-o fs=${NANO_ZFSBOOT_POOL_NAME}/cfg;mountpoint=legacy;exec=off;setuid=off"
 
 # Create the /etc/fstab file
 tgt_write_fstab() {
@@ -80,8 +101,7 @@ tgt_write_fstab() {
 	if is_boot_type UEFI; then
 		printf_fstab "/dev/gpt/efiboot0" /boot/efi msdosfs rw,noauto 2 2
 	fi
-	printf_fstab "/dev/gpt/${NANO_ROOT}" / ufs ro 1 1
-	printf_fstab /dev/gpt/${NANO_PARTITION_CFG} /cfg ufs rw,noauto 2 2
+	printf_fstab "${NANO_PARTITION_CFG}" /cfg zfs rw,noauto 0 0
 	if [ "$NANO_SWAP_SIZE" -gt 0 ]; then
 		if [ -n "$NANO_SWAP_ENCRYPTION" ]; then
 			printf_fstab "/dev/gpt/swap0.eli" none swap sw 0 0
@@ -89,11 +109,15 @@ tgt_write_fstab() {
 			printf_fstab "/dev/gpt/swap0" none swap sw 0 0
 		fi
 	fi
-	if [ "$NANO_DATASIZE" -ne 0 ]; then
-		printf_fstab /dev/gpt/${NANO_PARTITION_DATA} /${NANO_PARTITION_DATA} ufs rw,noauto 2 2
-	fi
 
 	tgt_touch etc/fstab
+
+	echo 'zfs_enable="YES"' >> etc/defaults/rc.conf
+	echo "zpool_reguid=\"${NANO_ZFSBOOT_POOL_NAME}\"" >> etc/defaults/rc.conf
+	echo "zpool_upgrade=\"${NANO_ZFSBOOT_POOL_NAME}\"" >> etc/defaults/rc.conf
+	echo 'zfs_bootonce_activate="YES"' >> etc/defaults/rc.conf
+	echo "kern.geom.label.disk_ident.enable=0" >> boot/defaults/loader.conf
+	echo 'zfs_load="YES"' >> boot/defaults/loader.conf
 	)
 }
 
@@ -102,7 +126,7 @@ tgt_etc_remount() {
 	(
 	cd "$NANO_WORLDDIR"
 
-	echo "mount -o ro /dev/gpt/${NANO_PARTITION_CFG}" > conf/default/etc/remount
+	echo "mount -o ro -t zfs ${NANO_PARTITION_CFG}" > conf/default/etc/remount
 	tgt_touch conf/default/etc/remount
 	)
 }
@@ -169,7 +193,7 @@ make_esp_partition() {
 	mkdir -p "${espdir}/EFI/BOOT"
 
 	efibootname=$(get_uefi_bootname)
-	bootcode="${NANO_WORLDDIR}/$(get_bootcode uefi gpt)"
+	bootcode="${NANO_WORLDDIR}/$(get_bootcode uefi zfs)"
 
 	if [ ! -f "$bootcode" ]; then
 		echo "Image will not be bootable"
@@ -177,12 +201,11 @@ make_esp_partition() {
 
 	cp -p "$bootcode" "${espdir}/EFI/BOOT/${efibootname}.EFI"
 
-	# XXXJL https://wiki.archlinux.org/title/EFI_system_partition#Firmware_does_not_see_the_EFI_directory
-	#       Other FreeBSD tools use EFISYS
+	# XXXJL it needs a volume_label, otherwise, it fails!
 	makefs -t msdos \
 	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
-	    -o volume_label="EFI" \
+	    -o volume_label="EFISYS" \
 	    -o OEM_string="" \
 	    -s "${esp_sects}b" \
 	    -T "$NANO_TIMESTAMP" \
@@ -245,10 +268,10 @@ calculate_partitioning() {
 	is_boot_type UEFI && esp_sects=$(( NANO_EFI_BOOTPART_SIZE / NANO_SECTOR_SIZE ))
 	[ -n "$NANO_CIDATA_SIZE" ] && cidata_sects=$(( NANO_CIDATA_SIZE / NANO_SECTOR_SIZE ))
 
-	echo "$NANO_MEDIASIZE" "$NANO_IMAGES" "$NANO_SECTOR_SIZE" \
-	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
+	echo "$NANO_MEDIASIZE" "REMOVE" "$NANO_SECTOR_SIZE" \
+	    "$NANO_CODESIZE" "REMOVE" "REMOVE" "$boot_type" \
 	    "$boot_sects" "$esp_sects" "$NANO_SWAP_SIZE" "$NANO_ROOT" \
-	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
+	    "REMOVE" "REMOVE" "REMOVE" \
 	    "$align" "$cidata_sects" | awk '
 	function roundup(sects) {
 		return int((sects + align - 1) / align) * align
@@ -260,7 +283,7 @@ calculate_partitioning() {
 		} else if (swap_sects > 0) {
 			wtype = "freebsd-swap"
 		} else {
-			wtype = "freebsd-ufs"
+			wtype = "freebsd-zfs"
 		}
 		wtype = length(wtype)
 		wblocks = length(media_sects)
@@ -302,12 +325,6 @@ calculate_partitioning() {
 		# Swap size in sectors (rounded up)
 		swap_sects = ($10  > 0) ? roundup($10) : 0
 
-		# Configuration partition size in sectors (rounded up)
-		cfg_sects = roundup($5 / ssize)
-
-		# Data partition size in sectors (rounded up)
-		data_sects = ($6 > 0) ? roundup($6) : $6
-
 		# Starting sector (512/4K-bytes aligned)
 		sstart = 40
 
@@ -339,7 +356,6 @@ calculate_partitioning() {
 			print_line("efi", esp_sects, "efiboot0")
 		}
 
-		# Swap partition (if any)
 		if (swap_sects > 0) {
 			print_line("freebsd-swap", swap_sects, "swap0")
 		}
@@ -347,33 +363,15 @@ calculate_partitioning() {
 		# Code partition size in sectors
 		code_sects = int($4 / ssize)
 		if (code_sects == 0) {
-			# (rounded down)
-			total_code_sects = avail_sects - cfg_sects - \
-			    ((data_sects > 0) ? data_sects : 0)
-			total_code_sects = int(total_code_sects / align) * align
-			code_sects = int((total_code_sects / $2) / align) * align
+			# rounded down
+			code_sects = int(avail_sects / align) * align
 		} else {
-			# (rounded up)
+			# rounded up
 			code_sects = roundup(code_sects)
 		}
 
 		# First code partition
-		print_line("freebsd-ufs", code_sects, $11)
-
-		# Second code partition (if any)
-		if ($2 > 1) {
-			print_line("freebsd-ufs", code_sects, $12)
-		}
-
-		# Configuration partition
-		print_line("freebsd-ufs", cfg_sects, $13)
-
-		# Data partition (if any)
-		if (data_sects > 0) {
-			print_line("freebsd-ufs", data_sects, $14)
-		} else if (data_sects < 0 && avail_sects > 0) {
-			print_line("freebsd-ufs", avail_sects, $14)
-		}
+		print_line("freebsd-zfs", code_sects, $11)
 
 		# Overcommit check
 		if (avail_sects < 0) {
@@ -392,16 +390,28 @@ create_code_partition() {
 	(
 	local IMG code_sects code_size
 
+	# XXXJL can we normalize the naming? create_esp_partition, create_cidata_partition, etc.
+	# XXXJL this does not belong here
 	if [ "$NANO_CIDATA_SIZE" -gt 0 ]; then
 		mkdir -p "${NANO_WORLDDIR}/boot/msdos"
 	fi
+
+	# XXXJL how do we populate_cfg_dataset()?
+	# XXXJL NANO_METALOG_CFG
+	mkdir -p "${NANO_WORLDDIR}/cfg"
+	cp -a "${NANO_CFGDIR}/"* "${NANO_WORLDDIR}/cfg"
+
+	cp /usr/src/libexec/nuageinit/nuageinit "${NANO_WORLDDIR}/usr/libexec/nuageinit"
+	cp /usr/src/libexec/rc/rc.d/nuageinit "${NANO_WORLDDIR}/etc/rc.d/nuageinit"
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
 	code_size=$(( code_sects * NANO_SECTOR_SIZE ))
 
+	# XXXJL Ideally we ship with a golden boot environment (default) and generate a diff against that
+	#       for delta upgrades
 	echo "Writing code image..."
-	nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
+	nano_makefs "zfs" "$NANO_MAKEFS" \
 	    "$NANO_METALOG" "$code_size" "$IMG" "$NANO_WORLDDIR"
 	) > "${NANO_OBJ}/_.cp" 2>&1
 }
@@ -416,25 +426,20 @@ create_diskimage() {
 	pprint 3 "log: ${NANO_OBJ}/_.di"
 
 	(
-	local IMG code_sects code_size cfg_sects cfg_size data_sects data_size
-	local bootcode cfg cidata data efiboot0 gptboot0 swap0
-	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" # XXX: NANO_ALTROOT
+	local IMG code_sects code_size
+	local bootcode cidata efiboot0 gptboot0 swap0
+	local code "${NANO_ROOT}"
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
 	code_size=$(( code_sects * NANO_SECTOR_SIZE ))
-	cfg_sects=$(awk '$5 == "cfg" {print $4}' "${NANO_LOG}/_.partitioning")
-	cfg_size=$(( cfg_sects * NANO_SECTOR_SIZE ))
-	data_sects=$(awk '$5 == "data" {print $4}' "${NANO_LOG}/_.partitioning")
-	data_size=$(( data_sects * NANO_SECTOR_SIZE ))
 
 	# Build mkimg partition entries
 	if [ -f "${NANO_WORLDDIR}/boot/pmbr" ]; then
 		bootcode="-b ${NANO_WORLDDIR}/boot/pmbr"
 	fi
 
-	for image in gptboot0 cidata efiboot0 swap0 \
-	    ${NANO_ROOT} ${NANO_ALTROOT} cfg data; do
+	for image in gptboot0 cidata efiboot0 swap0 ${NANO_ROOT}; do
 		match=$(awk -v dir="$NANO_OBJ" -v img="$image" -v ssize="$NANO_SECTOR_SIZE" \
 			'$5 == img {
 				if ($5 == "swap0") {
@@ -452,11 +457,10 @@ create_diskimage() {
 	done
 
 	# Use fixed variable names when dealing with code partitions
-	eval "code1=\"\$${NANO_ROOT}\""
-	eval "code2=\"\$${NANO_ALTROOT}\""
+	eval "code=\"\$${NANO_ROOT}\""
 
-	# Rename code1 image name to match NANO_IMG1NAME
-	code1=$(echo "$code1" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
+	# Rename code image name to match NANO_IMG1NAME
+	code=$(echo "$code" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
 
 	# Create boot partition (if any)
 	is_boot_type BIOS && make_boot_partition
@@ -473,33 +477,6 @@ create_diskimage() {
 		err "Swap size (${NANO_SWAP_SIZE}) too small (must be > 100 MiB)."
 	fi
 
-	# Create secondary code partition (if any)
-	if [ "$NANO_IMAGES" -gt 1 ]; then
-		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
-			echo "Duplicating to second image..."
-			tgt_switch_root_fstab 1 2
-			nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
-			    "${NANO_METALOG}" "$code_size" \
-			    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" "${NANO_WORLDDIR}"
-			tgt_switch_root_fstab 2 1
-		else
-			code2=$(echo "$code2" |
-			    sed "s#=${NANO_OBJ}/_.${NANO_ALTROOT}.image#:${code_size}#")
-		fi
-	fi
-
-	# Create cfg partition
-	populate_cfg_part "${NANO_OBJ}/_.cfg.image" \
-	    "$NANO_CFGDIR" "$NANO_PARTITION_CFG" "$cfg_size" \
-	    "$NANO_METALOG_CFG"
-
-	# Create data partition (if any)
-	if [ "${NANO_DATASIZE}" -ne 0 ]; then
-		populate_data_part "${NANO_OBJ}/_.data.image" \
-		    "$NANO_DATADIR" "$NANO_PARTITION_DATA" "$data_size" \
-		    "$NANO_METALOG_DATA"
-	fi
-
 	echo "Writing out ${NANO_IMGNAME}..."
 	mkimg -s gpt -S ${NANO_SECTOR_SIZE} \
 	    --capacity ${NANO_MEDIASIZE} \
@@ -508,62 +485,12 @@ create_diskimage() {
 	    ${cidata} \
 	    ${efiboot0} \
 	    ${swap0} \
-	    ${code1} \
-	    ${code2} \
-	    ${cfg} \
-	    ${data} \
+	    ${code} \
 	    -o ${IMG}
 
 	# Cleanup
 	rm -f "${NANO_OBJ}/_.gptboot0.image" \
 	    "${NANO_OBJ}/_.cidata.image" \
 	    "${NANO_OBJ}/_.efiboot0.image" \
-	    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" \
-	    "${NANO_OBJ}/_.cfg.image" \
-	    "${NANO_OBJ}/_.data.image" \
 	) > "${NANO_LOG}/_.di" 2>&1
-}
-
-tgt_switch_root_fstab() {
-	local current new
-	current="$1"
-	new="$2"
-
-	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
-		sed -i "" "s=/dev/gpt/${NANO_LABEL}${current}=/dev/gpt/${NANO_LABEL}${new}=g" "${f}"
-	done
-}
-
-# Patch gptboot rc script to understand ping-ponging between partitions
-tgt_patch_gptboot() {
-	(
-	cd "$NANO_WORLDDIR"
-
-	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 666 etc/rc.d/gptboot
-	if ! patch -s -V none etc/rc.d/gptboot <<\EOF
---- etc/rc.d/gptboot
-+++ etc/rc.d/gptboot
-@@ -58,6 +58,12 @@
- 					# We want to log success after all failures.
- 					echo -n "Boot from ${part} succeeded."
- 					gpart unset -a bootonce -i ${pos} ${disk} >/dev/null
-+					old_bootme=$(gpart show "${disk}" |
-+					    egrep 'freebsd-ufs.*(\[|,)bootme(,|\])' | awk '{print $3}')
-+					if [ -n "${old_bootme}" ]; then
-+						gpart unset -a bootme -i "${old_bootme}" "${disk}" >/dev/null
-+					fi
-+					gpart set -a bootme -i ${pos} ${disk} >/dev/null
- 				fi
- 			fi
- 			;;
-EOF
-	then
-		err "Patching /etc/rc.d/gptboot failed!"
-	fi
-	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 555 etc/rc.d/gptboot
-	if [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg_update_file_sha256 etc/rc.d/gptboot
-		tgt_pkg_update_config_files_content etc/rc.d/gptboot
-	fi
-	)
 }
