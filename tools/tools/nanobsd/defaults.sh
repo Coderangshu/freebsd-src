@@ -1494,7 +1494,7 @@ nano_makefs() {
 	dir=$6
 
 	# Prefer -R for UFS, as -s the does not include the offset.
-	if [ "$NANO_FILE_SYSTEM" = "UFS" ]; then
+	if [ "$NANO_FILE_SYSTEM" = "UFS"]; then
 		size_option="-R $size"
 	else
 		size_option="-s $size"
