@@ -194,19 +194,9 @@ create_boot_partition() {
 
 # Create an EFI System Partition image file
 create_esp_partition() {
-	local bootcode efibootname espdir esp_sects fat_type
+	local bootcode efibootname espdir esp_sects
 
-	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
-	MINCLS16=4085	# minimum FAT16 clusters (0xff5U)
-	MINCLS32=65525	# minimum FAT32 clusters (0xfff5U)
 	esp_sects=$(awk '$5 == "efiboot0" {print $4}' "${NANO_LOG}/_.partitioning")
-	if [ "$esp_sects" -ge "$MINCLS32" ]; then
-		fat_type=32
-	elif [ "$esp_sects" -ge "$MINCLS16" ]; then
-		fat_type=16
-	else
-		fat_type=12
-	fi
 
 	espdir="${NANO_OBJ}/_.efi"
 	rm -rf "$espdir"
@@ -224,11 +214,10 @@ create_esp_partition() {
 	# XXXJL https://wiki.archlinux.org/title/EFI_system_partition#Firmware_does_not_see_the_EFI_directory
 	#       Other FreeBSD tools use EFISYS
 	makefs -t msdos \
-	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
 	    -o volume_label="EFI" \
 	    -o OEM_string="" \
-	    -s "${esp_sects}b" \
+	    -s "$(( esp_sects * NANO_SECTOR_SIZE ))" \
 	    -T "$NANO_TIMESTAMP" \
 	    "${NANO_OBJ}/_.efiboot0.image" "$espdir"
 
@@ -237,19 +226,9 @@ create_esp_partition() {
 
 # Create an MS Basic Data Partition for nuageinit (cidata)
 create_cidata_partition() {
-	local cidatadir cidata_sects fat_type
+	local cidatadir cidata_sects
 
-	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
-	MINCLS16=4085	# minimum FAT16 clusters (0xff5U)
-	MINCLS32=65525	# minimum FAT32 clusters (0xfff5U)
 	cidata_sects=$(awk -v label="cidata" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
-	if [ "$cidata_sects" -ge "$MINCLS32" ]; then
-		fat_type=32
-	elif [ "$cidata_sects" -ge "$MINCLS16" ]; then
-		fat_type=16
-	else
-		fat_type=12
-	fi
 
 	cidatadir="${NANO_OBJ}/_.cidata"
 	rm -rf "$cidatadir"
@@ -258,11 +237,10 @@ create_cidata_partition() {
 	is_defined populate_cidata_partition && populate_cidata_partition
 
 	makefs -t msdos \
-	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
 	    -o volume_label="CIDATA" \
 	    -o OEM_string="" \
-	    -s "${cidata_sects}b" \
+	    -s "$(( cidata_sects * NANO_SECTOR_SIZE ))" \
 	    -T "$NANO_TIMESTAMP" \
 	    "${NANO_OBJ}/_.cidata.image" "$cidatadir"
 
@@ -555,7 +533,11 @@ create_diskimage() {
 	fi
 
 	echo "Writing out ${NANO_IMGNAME}..."
-	mkimg -s gpt -S ${NANO_SECTOR_SIZE} \
+	# GPT LBA addressing stays 512 (-S) for bootloader compatibility
+	# gptboot.efi assume 512-byte LBAs and can't be told otherwise.
+    # NANO_SECTOR_SIZE still drives the physical block size (-P,
+    # partition alignment) and filesystem content (makefs -S).
+	mkimg -s gpt -S 512 -P ${NANO_SECTOR_SIZE} \
 	    --capacity ${NANO_MEDIASIZE} \
 	    ${bootcode} \
 	    ${gptboot0} \
