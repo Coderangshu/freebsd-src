@@ -27,41 +27,62 @@ find . -type f 2>/dev/null | while read -r relative_path; do
 			file_path="${filename%/*}"
 			if [ "$file_path" != "$filename" ]; then
 				if [ ! -d "/etc/${file_path}" ]; then
-					echo "Error: Path /etc/${file_path} is not a directory." >&2
+					printf "Error: Path /etc/%s is not a directory.\n" \
+					    "$file_path" >&2
 					exit 1;
 				fi
 			fi
 
 			#
 			# Ask user - how should we handle this file.
-			# Add to cfg (y/n/i)?
+			# Add to cfg (y/N/i/?)?
 			#	y) -> save this file in /cfg
 			#	n) -> do not save this file in /cfg for current
-			#	      script invocation ONLY
+			#	      script invocation ONLY (default)
 			#	i) -> add file to ignore list (/cfg/.ignore hierarchy)
-			#	      and never try to add this file to /cfg.
+			#	      and never try to add this file to /cfg
+			#	?) -> print help
 			#
 			# touch is used to add files to /cfg to keep the script
 			# flow straight and easy
 			#
-			read -rp "New file /etc/${filename} found. Add to /cfg (y/n/i)? " key < /dev/tty
-			case "$key" in
-			[yY])
-				if [ "$file_path" != "$filename" ]; then
-					mkdir -vp "/cfg/${file_path}"
-				fi
-				touch "/cfg/${filename}" &&
-				    echo "File /etc/${filename} added to /cfg."
-				;;
-			[iI])
-				mkdir -vp /cfg/.ignore
-				if [ "$file_path" != "$filename" ]; then
-					mkdir -vp "/cfg/.ignore/${file_path}"
-				fi
-				touch "/cfg/.ignore/${filename}" &&
-				    echo "File /etc/${filename} added to ignore list."
-				;;
-			esac
+			while true; do
+				printf "New file /etc/%s found. Add to /cfg (y/N/i/?)? " \
+				    "$filename" > /dev/tty
+				read -r key < /dev/tty
+				case "$key" in
+				[yY])
+					if [ "$file_path" != "$filename" ]; then
+						mkdir -p "/cfg/${file_path}" &&
+						    printf "Directory /etc/%s added to /cfg.\n" \
+						    "$file_path"
+					fi
+					touch "/cfg/${filename}" &&
+					    printf "File /etc/%s added to /cfg.\n" \
+					    "$filename"
+					break
+					;;
+				[iI])
+					mkdir -p /cfg/.ignore
+					if [ "$file_path" != "$filename" ]; then
+						mkdir -p "/cfg/.ignore/${file_path}"
+					fi
+					touch "/cfg/.ignore/${filename}" &&
+					    printf "File /etc/%s added to ignore list.\n" \
+					    "$filename"
+					break
+					;;
+				\?)
+					echo "  y - save this file in /cfg" > /dev/tty
+					echo "  n - do not save this file in /cfg for current" > /dev/tty
+					echo "      script invocation ONLY (default)" > /dev/tty
+					echo "  i - add file to ignore list (/cfg/.ignore hierarchy)" > /dev/tty
+					echo "      and never try to add this file to /cfg" > /dev/tty
+					echo "  ? - print help" > /dev/tty
+					;;
+				*) break ;;
+				esac
+			done
 		fi
 	fi
 done || exit 1
@@ -85,11 +106,13 @@ find . -type f 2>/dev/null | while read -r relative_path; do
 		# Give user an option to remove file from /cfg if this file is
 		# removed from /etc
 		#
-		read -rp "File /cfg/${filename} not found in /etc. Remove from /cfg (y/n)? " key < /dev/tty
+		printf "File /cfg/%s not found in /etc. Remove from /cfg (y/N)? " \
+		    "$filename" > /dev/tty
+		read -r key < /dev/tty
 		case "$key" in
 		[yY])
 			rm "/cfg/${filename}" &&
-			    echo "File /cfg/${filename} removed"
+			    printf "File /cfg/%s removed.\n" "$filename"
 			;;
 		esac
 	fi
