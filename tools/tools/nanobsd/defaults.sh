@@ -208,6 +208,186 @@ SRC_ENV_CONF=/dev/null
 # CPIO_SYMLINK=--insecure
 
 #######################################################################
+# Distribution Set variables and functions
+#
+
+# The default mirror for downloading distribution sets
+# See: https://docs.freebsd.org/en/books/handbook/mirrors/
+NANO_MIRROR="https://download.freebsd.org"
+NANO_BRANCH=$(sed -n '/^BRANCH=/{s,.*=,,;s,",,g;s,-.*,,;p;}' ${NANO_SRC}/sys/conf/newvers.sh)
+NANO_REVISION=$(sed -n '/^REVISION=/{s,.*=,,;s,",,g;p;}' ${NANO_SRC}/sys/conf/newvers.sh)
+# The set of distributions to install
+# See bsdinstall(8) DISTRIBUTIONS for a reference
+NANO_DISTRIBUTIONS="base.txz kernel.txz"
+
+#
+# Check whether a distribution name is present in NANO_DISTRIBUTIONS
+# Input: $1 = distribution name to check
+# Output: returns 0 if found, 1 if not
+#
+nano_distributions_contains() {
+	case " ${NANO_DISTRIBUTIONS} " in
+	*"$1"*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# Map NANO_BRANCH to the directory used by FreeBSD download URLs
+nano_distset_reldir() {
+	case ${NANO_BRANCH} in
+	ALPHA*|CURRENT|STABLE|PRERELEASE) echo "snapshots" ;;
+	*) echo "releases" ;;
+	esac
+}
+
+# Map NANO_ARCH to the platform/arch format used by FreeBSD download URLs
+nano_distset_arch() {
+	case "$NANO_ARCH" in
+	aarch64)     echo "arm64/aarch64" ;;
+	amd64)       echo "amd64/amd64" ;;
+	powerpc64)   echo "powerpc/powerpc64" ;;
+	powerpc64le) echo "powerpc/powerpc64le" ;;
+	riscv64)     echo "riscv/riscv64" ;;
+	*)           err "Unsupported NANO_ARCH '${NANO_ARCH}'" ;;
+	esac
+}
+
+# Build the local cache directory path where distribution tarballs are stored
+nano_distset_dir() {
+	echo "${NANO_OBJ}/_.cache/$(nano_distset_reldir)/$(nano_distset_arch)/${NANO_REVISION}-${NANO_BRANCH}"
+}
+
+#
+# Build the remote download URL for distribution tarballs,
+# handling both ftp and https mirror formats
+#
+nano_distset_url() {
+	local site
+
+	case "$NANO_MIRROR" in
+	*ftp*)
+		site="${NANO_MIRROR}/pub/FreeBSD"
+		;;
+	*)
+		site="$NANO_MIRROR"
+		;;
+	esac
+
+	echo "${site}/$(nano_distset_reldir)/$(nano_distset_arch)/${NANO_REVISION}-${NANO_BRANCH}"
+}
+
+#
+# Download tarballs from the FreeBSD mirror and
+# verify their SHA256 checksums against MANIFEST
+#
+nano_fetch_distsets() {
+	pprint 2 "fetch distribution sets"
+	pprint 3 "log: ${NANO_LOG}/_.ds"
+
+	if [ ! -d "$NANO_LOG" ]; then
+		mkdir -p "$NANO_LOG"
+	fi
+
+	(
+	if [ -z "$NANO_DISTRIBUTIONS" ]; then
+		err "NANO_DISTRIBUTIONS variable is not set"
+	fi
+	nano_distributions_contains " base.txz " || err "base.txz is mandatory"
+	nano_distributions_contains " kernel.txz " || err "kernel.txz is mandatory"
+
+	if $do_clean; then
+		rm -rf "${NANO_OBJ}/_.cache"
+	else
+		pprint 2 "Using existing distributions (as instructed)"
+	fi
+
+	if [ ! -d "$(nano_distset_dir)"  ]; then
+		mkdir -p "$(nano_distset_dir)"
+	fi
+
+	if [ ! -f "$(nano_distset_dir)/MANIFEST" ]; then
+		echo "Downloading MANIFEST"
+		if ! fetch -o "$(nano_distset_dir)" "$(nano_distset_url)/MANIFEST"; then
+			err "Failed to download $(nano_distset_url)/MANIFEST"
+		fi
+	fi
+
+	for distset in $NANO_DISTRIBUTIONS; do
+		if [ ! -f "$(nano_distset_dir)/${distset}" ]; then
+			echo "Downloading ${distset}"
+			if ! fetch -o "$(nano_distset_dir)/${distset}" "$(nano_distset_url)/${distset}"; then
+				err "Failed to download $(nano_distset_url)/${distset}"
+			fi
+		fi
+	done
+
+	if [ -f "$(nano_distset_dir)/MANIFEST" ]; then
+		for distset in $NANO_DISTRIBUTIONS; do
+			if [ -f "$(nano_distset_dir)/${distset}" ]; then
+				echo "Checksumming ${distset}"
+				expected=$(awk "/${distset}/ { print \$2 }" "$(nano_distset_dir)/MANIFEST")
+				current=$(sha256 -q "$(nano_distset_dir)/${distset}")
+				if [ -z "$expected" ]; then
+					err "Invalid distribution set '${distset}'"
+				fi
+				if [ "$current" != "$expected" ]; then
+					err "${distset} checksum mismatch"
+				fi
+			else
+				err "Invalid distribution set '${distset}'"
+			fi
+		done
+	fi
+	) > "${NANO_LOG}/_.ds" 2>&1
+}
+
+#
+# Apply freebsd-update patches to precompiled distribution binaries
+# Distribution Sets are not patched, use the same logic from poudriere(8)
+#
+patch_precompiled() {
+	pprint 2 "patch distribution set binaries"
+	pprint 3 "log: ${NANO_LOG}/_.pds"
+
+	(
+	# Fix freebsd-update to not check for TTY and to allow
+	# EOL branches to still get updates
+	fu_bin="$(mktemp -t freebsd-update)"
+	trap 'rm -rf "${fu_bin}"' 1 2 15 EXIT
+	sed \
+	    -e 's/! -t 0/1 -eq 0/' \
+	    -e 's/-t 0/1 -eq 1/' \
+	    -e 's,\(fetch_warn_eol ||\) return 1,\1 :,' \
+	    -e 's,sysctl -n kern.bootfile,echo /boot/kernel/kernel,' \
+	    -e 's,service sshd restart,#service sshd restart,' \
+	    /usr/sbin/freebsd-update > "${fu_bin}"
+	FREEBSD_UPDATE="env PAGER=/bin/cat"
+	FREEBSD_UPDATE="${FREEBSD_UPDATE} /bin/sh ${fu_bin}"
+	fu_basedir="${NANO_WORLDDIR}"
+	FREEBSD_UPDATE="${FREEBSD_UPDATE} -b ${fu_basedir}"
+	fu_workdir="${NANO_WORLDDIR}/var/db/freebsd-update"
+	FREEBSD_UPDATE="${FREEBSD_UPDATE} -d ${fu_workdir}"
+	FREEBSD_UPDATE="${FREEBSD_UPDATE} --currently-running ${NANO_REVISION}-${NANO_BRANCH}"
+	FREEBSD_UPDATE="${FREEBSD_UPDATE} -f ${NANO_WORLDDIR}/etc/freebsd-update.conf"
+
+	if ${FREEBSD_UPDATE} fetch; then
+		yes | ${FREEBSD_UPDATE} install
+	fi
+
+	set -o xtrace
+
+	# Remove old kernel
+	rm -rf "${NANO_WORLDDIR}/boot/kernel.old"
+	# Remove freebsd-update(8) database files
+	rm -rf "${NANO_WORLDDIR}"/var/db/freebsd-update/*
+	# Remove etcupdate(8) database
+	rm -rf "${NANO_WORLDDIR}/var/db/etcupdate"
+
+	_xxx_remove_extra_dist_files
+	) > "${NANO_LOG}/_.pds" 2>&1
+}
+
+#######################################################################
 #
 # The functions which do the real work.
 # Can be overridden from the config file(s)
@@ -465,6 +645,30 @@ install_world() {
 }
 
 #
+# Install the world from pkgbase packages or distribution tarballs
+# instead of building from source
+#
+install_precompiled_world() {
+	pprint 2 "install precompiled world"
+	pprint 3 "log: ${NANO_LOG}/_.iw"
+
+	(
+	set -o xtrace
+	for distset in $NANO_DISTRIBUTIONS; do
+		if [ "$distset" = "kernel.txz" ] || \
+		    [ "$distset" = "kernel-dbg.txz" ]; then
+			continue
+		fi
+		if [ -f "$(nano_distset_dir)/${distset}" ]; then
+			tar -xvf "$(nano_distset_dir)/${distset}" -C "${NANO_WORLDDIR}"
+		else
+			err "File $(nano_distset_dir)/${distset} not found"
+		fi
+	done
+	) > "${NANO_LOG}/_.iw" 2>&1
+}
+
+#
 # Run "make distribution" to populate /etc in NANO_WORLDDIR
 # and create an empty make.conf
 #
@@ -506,6 +710,25 @@ install_kernel() {
 	${NANO_MAKE} installkernel DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes
 
 	) > ${NANO_LOG}/_.ik 2>&1
+}
+
+# Install a precompiled kernel from pkgbase packages or distribution tarballs
+install_precompiled_kernel() {
+	pprint 2 "install precompiled kernel (GENERIC)"
+	pprint 3 "log: ${NANO_LOG}/_.ik"
+
+	(
+	set -o xtrace
+	if [ -f "$(nano_distset_dir)/kernel.txz" ]; then
+		tar -xvf "$(nano_distset_dir)/kernel.txz" -C "${NANO_WORLDDIR}"
+	else
+		err "File $(nano_distset_dir)/kernel.txz not found"
+	fi
+	if nano_distributions_contains " kernel-dbg.txz " &&
+	    [ -f "$(nano_distset_dir)/kernel-dbg.txz" ]; then
+		tar -xvf "$(nano_distset_dir)/kernel-dbg.txz" -C "${NANO_WORLDDIR}"
+	fi
+	) > "${NANO_LOG}/_.ik" 2>&1
 }
 
 #
@@ -1142,7 +1365,7 @@ pprint() {
 # Print the nanobsd.sh command-line option summary to stderr, exit with code 2
 usage() {
 	(
-	echo "Usage: $0 [-BbfhIiKknpqUvWwX] [-c config_file]"
+	echo "Usage: $0 [-BbfhIiKknPpqUvWwX] [-c config_file]"
 	echo "	-B	suppress installs (both kernel and world)"
 	echo "	-b	suppress builds (both kernel and world)"
 	echo "	-c	specify config file"
@@ -1153,6 +1376,7 @@ usage() {
 	echo "	-K	suppress installkernel"
 	echo "	-k	suppress buildkernel"
 	echo "	-n	add -DNO_CLEAN to buildworld, buildkernel, etc"
+	echo "	-P	use pre-compiled binaries"
 	echo "	-p	suppress preparing the image"
 	echo "	-q	make output more quiet"
 	echo "	-U	add -DNO_ROOT to build without root privileges"
