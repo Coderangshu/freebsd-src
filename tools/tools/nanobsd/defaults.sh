@@ -1240,7 +1240,9 @@ fixup_before_diskimage() {
 	fi
 
 	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		_xxx_fix_pkg_permissions
 		tgt_pkg_time_timestamp
+		_xxx_pkg_db_vacuum
 	fi
 }
 
@@ -1285,6 +1287,10 @@ setup_nanobsd() {
 	# Disable all package repositories
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		nano_pkg_disable_repos
+	fi
+
+	if [ -n "$NANO_METALOG" ]; then
+		_xxx_pkg_add_var_db_files_to_metalog
 	fi
 
 	for d in var etc; do
