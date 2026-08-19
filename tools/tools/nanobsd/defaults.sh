@@ -159,6 +159,9 @@ NANO_SWAP_ENCRYPTION=""
 # EFI System Partition size in bytes
 NANO_EFI_BOOTPART_SIZE="260Mi"
 
+# CIDATA Partition size in bytes (nuageinit)
+NANO_CIDATA_SIZE=0
+
 # Progress Print level
 PPLEVEL=3
 
@@ -1814,6 +1817,7 @@ set_defaults_and_export() {
 		NANO_RAM_ETCSIZE=$(strtobytes "${NANO_RAM_ETCSIZE:-0}")
 		NANO_RAM_TMPVARSIZE=$(strtobytes "${NANO_RAM_TMPVARSIZE:-0}")
 		NANO_SWAP_SIZE=$(strtobytes "${NANO_SWAP_SIZE:-0}")
+		NANO_CIDATA_SIZE=$(strtobytes "${NANO_CIDATA_SIZE:-0}")
 		NANO_EFI_BOOTPART_SIZE=$(strtobytes "${NANO_EFI_BOOTPART_SIZE:-0}")
 	fi
 
@@ -1832,6 +1836,7 @@ set_defaults_and_export() {
 	export_var MAKEOBJDIRPREFIX
 	export_var NANO_ARCH
 	export_var NANO_BOOTLOADER
+	export_var NANO_CIDATA_SIZE
 	export_var NANO_CODESIZE
 	export_var NANO_CONFSIZE
 	export_var NANO_CUSTOMIZE

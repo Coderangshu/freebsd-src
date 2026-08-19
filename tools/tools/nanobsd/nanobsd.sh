@@ -48,7 +48,6 @@ legacy() {
 }
 
 default() {
-	# Pull in default stuff on demand
 	. "${topdir}/gpt.sh"
 	NANO_PLAN="${NANO_PLAN:-default}"
 }

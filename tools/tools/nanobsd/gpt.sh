@@ -74,6 +74,9 @@ tgt_write_fstab() {
 	tgt_touch etc/nanobsd.conf
 
 	printf_fstab "# Device" Mountpoint FStype Options Dump "Pass#"
+	if [ "$NANO_CIDATA_SIZE" -gt 0 ]; then
+		printf_fstab "/dev/msdosfs/CIDATA" /boot/cidata msdosfs rw,noauto 2 2
+	fi
 	if is_boot_type UEFI; then
 		printf_fstab "/dev/gpt/efiboot0" /boot/efi msdosfs rw,noauto 2 2
 	fi
@@ -186,6 +189,41 @@ make_esp_partition() {
 	rm -rf "$espdir"
 }
 
+# Create an MS Basic Data Partition for nuageinit (cidata)
+make_cidata_partition() {
+	local cidatadir cidata_sects fat_type
+
+	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
+	MINCLS16=4085	# minimum FAT16 clusters (0xff5U)
+	MINCLS32=65525	# minimum FAT32 clusters (0xfff5U)
+	cidata_sects=$(awk -v label="cidata" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
+	if [ "$cidata_sects" -ge "$MINCLS32" ]; then
+		fat_type=32
+	elif [ "$cidata_sects" -ge "$MINCLS16" ]; then
+		fat_type=16
+	else
+		fat_type=12
+	fi
+
+	cidatadir="${NANO_OBJ}/_.cidata"
+	rm -rf "$cidatadir"
+	mkdir -p "$cidatadir"
+	# XXX: Where should we mount /boot/msdos?
+	# XXX: This mkdir -p operation has to be performed earlier than create_code_partition
+	mkdir -p "${NANO_WORLDDIR}/boot/cidata"
+
+	makefs -t msdos \
+	    -o fat_type="$fat_type" \
+	    -o sectors_per_cluster=1 \
+	    -o volume_label="cidata" \
+	    -o OEM_string="" \
+	    -s "${cidata_sects}b" \
+	    -T "$NANO_TIMESTAMP" \
+	    "${NANO_OBJ}/_.cidata.image" "$cidatadir"
+
+	rm -rf "$cidatadir"
+}
+
 #
 # Calculate partition sizes aligned at NANO_ALIGN boundaries.
 # All sizes are in bytes.
@@ -206,19 +244,26 @@ calculate_partitioning() {
 		boot_sects=$(( boot_size / NANO_SECTOR_SIZE ))
 	fi
 	is_boot_type UEFI && esp_sects=$(( NANO_EFI_BOOTPART_SIZE / NANO_SECTOR_SIZE ))
+	[ -n "$NANO_CIDATA_SIZE" ] && cidata_sects=$(( NANO_CIDATA_SIZE / NANO_SECTOR_SIZE ))
 
 	echo "$NANO_MEDIASIZE" "$NANO_IMAGES" "$NANO_SECTOR_SIZE" \
 	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
 	    "$boot_sects" "$esp_sects" "$NANO_SWAP_SIZE" "$NANO_ROOT" \
 	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
-	    "$align" |
-	    awk '
+	    "$align" "$cidata_sects" | awk '
 	function roundup(sects) {
 		return int((sects + align - 1) / align) * align
 	}
 	function print_line(type, sects, label,   windex, wtype, wblocks) {
 		windex = 3
-		wtype = ($7 == 1 || swap_sects > 0) ? length("freebsd-swap") : length("freebsd-ufs")
+		if (cidata_sects > 0) {
+			wtype = "ms-basic-data"
+		} else if (swap_sects > 0) {
+			wtype = "freebsd-swap"
+		} else {
+			wtype = "freebsd-ufs"
+		}
+		wtype = length(wtype)
 		wblocks = length(media_sects)
 
 		printf "%-*s %*s %*s %*s %s\n",
@@ -248,6 +293,9 @@ calculate_partitioning() {
 
 		# Boot size in sectors (already rounded up)
 		boot_sects = ($8 > 0) ? $8 : 0
+
+		# CIDATA size in sectors (rounded up)
+		cidata_sects = ($16 > 0) ? roundup($16) : 0
 
 		# ESP size in sectors (rounded up)
 		esp_sects = ($9 > 0) ? roundup($9) : 0
@@ -282,6 +330,11 @@ calculate_partitioning() {
 		avail_sects -= (align - sstart)
 		sstart = align
 
+		# CIDATA partition (if any)
+		if (cidata_sects > 0) {
+			print_line("ms-basic-data", cidata_sects, "cidata")
+		}
+
 		# ESP partition (if any)
 		if (esp_sects > 0) {
 			print_line("efi", esp_sects, "efiboot0")
@@ -298,8 +351,10 @@ calculate_partitioning() {
 			# (rounded down)
 			total_code_sects = avail_sects - cfg_sects - \
 			    ((data_sects > 0) ? data_sects : 0)
-			code_sects = int(total_code_sects / $2)
+			total_code_sects = int(total_code_sects / align) * align
+			code_sects = int((total_code_sects / $2) / align) * align
 		} else {
+			# (rounded up)
 			code_sects = roundup(code_sects)
 		}
 
@@ -359,7 +414,7 @@ create_diskimage() {
 
 	(
 	local IMG code_sects code_size cfg_sects cfg_size data_sects data_size
-	local bootcode cfg data efiboot0 gptboot0 swap0
+	local bootcode cfg cidata data efiboot0 gptboot0 swap0
 	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" # XXX: NANO_ALTROOT
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
@@ -375,7 +430,7 @@ create_diskimage() {
 		bootcode="-b ${NANO_WORLDDIR}/boot/pmbr"
 	fi
 
-	for image in gptboot0 efiboot0 swap0 \
+	for image in gptboot0 cidata efiboot0 swap0 \
 	    ${NANO_ROOT} ${NANO_ALTROOT} cfg data; do
 		match=$(awk -v dir="$NANO_OBJ" -v img="$image" -v ssize="$NANO_SECTOR_SIZE" \
 			'$5 == img {
@@ -402,6 +457,9 @@ create_diskimage() {
 
 	# Create boot partition (if any)
 	is_boot_type BIOS && make_boot_partition
+
+	# Create CIDATA partition (if any)
+	[ "$NANO_CIDATA_SIZE" -gt 0 ] && make_cidata_partition
 
 	# Create ESP partition (if any)
 	is_boot_type UEFI && make_esp_partition
@@ -444,6 +502,7 @@ create_diskimage() {
 	    --capacity ${NANO_MEDIASIZE} \
 	    ${bootcode} \
 	    ${gptboot0} \
+	    ${cidata} \
 	    ${efiboot0} \
 	    ${swap0} \
 	    ${code1} \
@@ -454,6 +513,7 @@ create_diskimage() {
 
 	# Cleanup
 	rm -f "${NANO_OBJ}/_.gptboot0.image" \
+	    "${NANO_OBJ}/_.cidata.image" \
 	    "${NANO_OBJ}/_.efiboot0.image" \
 	    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" \
 	    "${NANO_OBJ}/_.cfg.image" \
