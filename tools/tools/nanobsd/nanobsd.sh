@@ -31,7 +31,8 @@ set -e
 nanobsd_sh=$(realpath $0)
 topdir=$(dirname ${nanobsd_sh})
 . "${topdir}/defaults.sh"
-. "${topdir}/_xxx_includes.subr"
+. "${topdir}/customizations.sh"
+. "${topdir}/_xxx_includes.subr" # XXX ideally, this file should not exist
 
 is_defined() {
 	case $(type $1 2>/dev/null) in
