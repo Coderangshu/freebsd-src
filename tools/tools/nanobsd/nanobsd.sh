@@ -28,8 +28,8 @@
 
 set -e
 
-nanobsd_sh=`realpath $0`
-topdir=`dirname ${nanobsd_sh}`
+nanobsd_sh=$(realpath $0)
+topdir=$(dirname ${nanobsd_sh})
 . "${topdir}/defaults.sh"
 
 #######################################################################
@@ -50,8 +50,8 @@ do_prep_image=true
 . "${topdir}/legacy.sh"
 
 set +e
-args=`getopt BKXWbc:fhiIknpqUvw $*`
-if [ $? -ne 0 ] ; then
+args=$(getopt BKXWbc:fhiIknpqUvw $*)
+if [ $? -ne 0 ]; then
 	usage
 	exit 2
 fi
@@ -149,7 +149,7 @@ do
 	esac
 done
 
-if [ $# -gt 0 ] ; then
+if [ $# -gt 0 ]; then
 	echo "$0: Extraneous arguments supplied"
 	usage
 fi
@@ -168,14 +168,14 @@ fi
 
 pprint 1 "NanoBSD image ${NANO_NAME} build starting"
 
-if $do_prep_image ; then
+if $do_prep_image; then
 	run_early_customize
 else
 	pprint 2 "Skipping early customization for image prep (as instructed)"
 fi
 
-if $do_world ; then
-	if $do_clean ; then
+if $do_world; then
+	if $do_clean; then
 		clean_build
 	else
 		pprint 2 "Using existing build tree (as instructed)"
@@ -186,8 +186,8 @@ else
 	pprint 2 "Skipping buildworld (as instructed)"
 fi
 
-if $do_kernel ; then
-	if ! $do_world ; then
+if $do_kernel; then
+	if ! $do_world; then
 		make_conf_build
 	fi
 	build_kernel
@@ -204,19 +204,19 @@ else
     pprint 2 "Skipping installworld (as instructed)"
 fi
 
-if ${do_native_xtools} ; then
+if ${do_native_xtools}; then
 	native_xtools
 fi
-if ${do_prep_image} ; then
+if ${do_prep_image}; then
 	setup_nanobsd_etc
 fi
-if $do_installkernel ; then
+if $do_installkernel; then
 	install_kernel
 else
 	pprint 2 "Skipping installkernel (as instructed)"
 fi
 
-if $do_prep_image ; then
+if $do_prep_image; then
 	run_customize
 	setup_nanobsd
 	prune_usr
@@ -225,14 +225,14 @@ if $do_prep_image ; then
 else
 	pprint 2 "Skipping image prep (as instructed)"
 fi
-if $do_code ; then
+if $do_code; then
 	calculate_partitioning
 	if [ -z "${NANO_NOPRIV_BUILD}" ]; then
 		create_code_slice
 	else
 		_create_code_slice
 	fi
-	if $do_image ; then
+	if $do_image; then
 		if [ -z "${NANO_NOPRIV_BUILD}" ]; then
 			create_diskimage
 		else
