@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 The FreeBSD Foundation
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+
+set -e
+
+. /etc/nanobsd.conf
+
+: "${NANO_ROOT:?NANO_ROOT not set in /etc/nanobsd.conf}"
+: "${NANO_ALTROOT:?NANO_ALTROOT not set in /etc/nanobsd.conf}"
+
+root_mountfrom=$(kenv vfs.root.mountfrom)
+root_mountfrom=${root_mountfrom#*:}
+
+case "$root_mountfrom" in
+"/dev/gpt/${NANO_ALTROOT}")
+	curr_label="${NANO_ALTROOT}"
+	prev_label="${NANO_ROOT}"
+	;;
+"/dev/gpt/${NANO_ROOT}")
+	curr_label="${NANO_ROOT}"
+	prev_label="${NANO_ALTROOT}"
+	;;
+*)
+	echo "Invalid root device '${root_mountfrom}'." >&2
+	exit 1
+	;;
+esac
+
+component=$(glabel status | awk -v label="gpt/${prev_label}" '$1 == label {print $3}')
+if [ -z "$component" ]; then
+	echo "Could not find provider for '${prev_label}'." >&2
+	exit 1
+fi
+index="${component##*p}"
+geom="${component%p*}"
+
+printf "You are currently running on '%s'.\n" "$curr_label" > /dev/tty
+printf "Are you sure you want to roll back to '%s' (y/N)? " "$prev_label" > /dev/tty
+read -r key < /dev/tty
+case "$key" in
+[yY]) ;;
+*) exit 0 ;;
+esac
+
+echo "Rolling back to '${prev_label}' (${geom}p${index})..."
+
+gpart set -a bootonce -i "$index" "$geom"
+
+echo "Done!"
