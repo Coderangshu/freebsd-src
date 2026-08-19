@@ -36,7 +36,6 @@
 #
 
 sub_FlashDevice () {
-
 	a1=`echo $1 | tr '[:upper:]' '[:lower:]'`
 	a2=`echo $2 | tr '[:upper:]' '[:lower:]'`
 	case $a1 in
@@ -103,7 +102,7 @@ sub_FlashDevice () {
 		#	Version 10.9
 		#	Document No. 20-10-00038
 		#	April 2005
-		# Table 2-7 
+		# Table 2-7
 		# NB: notice math error in SDCFJ-4096-388 line.
 		#
 		case $a2 in
@@ -155,11 +154,11 @@ sub_FlashDevice () {
 		;;
 	siliconsystems)
 		case $a2 in
- 		256|256mb)
- 			NANO_MEDIASIZE=`expr 260571136 / 512`
- 			NANO_HEADS=16
- 			NANO_SECTS=32
- 			;;
+		256|256mb)
+			NANO_MEDIASIZE=`expr 260571136 / 512`
+			NANO_HEADS=16
+			NANO_SECTS=32
+			;;
 		4096|4g)
 			NANO_MEDIASIZE=`expr -e 4224761856 / 512`
 			NANO_HEADS=16
