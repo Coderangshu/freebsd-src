@@ -214,9 +214,11 @@ SRC_ENV_CONF=/dev/null
 #
 #######################################################################
 
+#
 # Export values into the shell.
 # We set __MAKE_CONF as a global since it is easier to get quoting
 # right for paths with spaces in them.
+#
 make_export() {
 	# Similar to export_var, except puts the data out to stdout
 	local var=$1
@@ -225,11 +227,19 @@ make_export() {
 	export $1
 }
 
+#
+# Set and export __MAKE_CONF to the build-phase make.conf path
+# for use during buildworld/buildkernel
+#
 nano_make_build_env() {
 	__MAKE_CONF="${NANO_MAKE_CONF_BUILD}"
 	make_export __MAKE_CONF
 }
 
+#
+# Set and export __MAKE_CONF to the install-phase make.conf path
+# for use during installworld/installkernel
+#
 nano_make_install_env() {
 	__MAKE_CONF="${NANO_MAKE_CONF_INSTALL}"
 	make_export __MAKE_CONF
@@ -248,6 +258,10 @@ nano_make_kernel_env() {
 	fi
 }
 
+#
+# Output TARGET_ARCH and TARGET_CPUTYPE make variable assignments
+# for inclusion in make.conf files
+#
 nano_global_make_env() {
 	# global settings for the make.conf file, if set
 	[ -z "${NANO_ARCH}" ] || echo TARGET_ARCH="${NANO_ARCH}"
@@ -344,6 +358,7 @@ clean_build() {
 	fi
 }
 
+# Construct build make.conf (NANO_MAKE_CONF_BUILD)
 make_conf_build() {
 	pprint 2 "Construct build make.conf ($NANO_MAKE_CONF_BUILD)"
 
@@ -363,6 +378,7 @@ make_conf_build() {
 	) > ${NANO_MAKE_CONF_BUILD}
 }
 
+# Run "make buildworld" using the build make.conf
 build_world() {
 	pprint 2 "run buildworld"
 	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bw"
@@ -375,6 +391,10 @@ build_world() {
 	) > ${MAKEOBJDIRPREFIX}/_.bw 2>&1
 }
 
+#
+# Run "make buildkernel" using the build make.conf,
+# building all kernel modules
+#
 build_kernel() {
 	pprint 2 "build kernel ($NANO_KERNEL)"
 	pprint 3 "log: ${MAKEOBJDIRPREFIX}/_.bk"
@@ -393,6 +413,7 @@ build_kernel() {
 	) > ${MAKEOBJDIRPREFIX}/_.bk 2>&1
 }
 
+# Remove and recreate NANO_OBJ or just NANO_WORLDDIR
 clean_world() {
 	if [ "${NANO_OBJ}" != "${MAKEOBJDIRPREFIX}" ]; then
 		pprint 2 "Clean and create object directory (${NANO_OBJ})"
@@ -412,6 +433,7 @@ clean_world() {
 	fi
 }
 
+# Construct install make.conf (NANO_MAKE_CONF_INSTALL)
 make_conf_install() {
 	pprint 2 "Construct install make.conf ($NANO_MAKE_CONF_INSTALL)"
 
@@ -428,6 +450,7 @@ make_conf_install() {
 	) >  ${NANO_MAKE_CONF_INSTALL}
 }
 
+# Run "make installworld" using the build make.conf
 install_world() {
 	pprint 2 "installworld"
 	pprint 3 "log: ${NANO_LOG}/_.iw"
@@ -441,6 +464,10 @@ install_world() {
 	) > ${NANO_LOG}/_.iw 2>&1
 }
 
+#
+# Run "make distribution" to populate /etc in NANO_WORLDDIR
+# and create an empty make.conf
+#
 install_etc() {
 	pprint 2 "install /etc"
 	pprint 3 "log: ${NANO_LOG}/_.etc"
@@ -456,6 +483,10 @@ install_etc() {
 	) > ${NANO_LOG}/_.etc 2>&1
 }
 
+#
+# Run "make installkernel" using the build make.conf
+# and optionally installing NANO_MODULES
+#
 install_kernel() {
 	pprint 2 "install kernel ($NANO_KERNEL)"
 	pprint 3 "log: ${NANO_LOG}/_.ik"
@@ -477,6 +508,10 @@ install_kernel() {
 	) > ${NANO_LOG}/_.ik 2>&1
 }
 
+#
+# Build and install optimized native cross-compilation tools into NANO_WORLDDIR
+# for cross-arch builds
+#
 native_xtools() {
 	pprint 2 "Installing the optimized native build tools for cross env"
 	pprint 3 "log: ${NANO_LOG}/_.native_xtools"
@@ -565,6 +600,11 @@ fixup_before_diskimage() {
 	fi
 }
 
+#
+# Relocate /usr/local/etc to /etc/local,
+# hard-links /etc and /var into /conf/base,
+# set ramdisk sizes, and symlinks /tmp to /var/tmp
+#
 setup_nanobsd() {
 	pprint 2 "configure nanobsd setup"
 	pprint 3 "log: ${NANO_LOG}/_.dl"
@@ -624,6 +664,10 @@ setup_nanobsd() {
 	) > ${NANO_LOG}/_.dl 2>&1
 }
 
+#
+# Create the diskless marker file,
+# disable entropy/UUID at boot in loader.conf/rc.conf, create fstab
+#
 setup_nanobsd_etc() {
 	pprint 2 "configure nanobsd /etc"
 
@@ -685,6 +729,7 @@ EOF
 	)
 }
 
+# Remove all empty directories under NANO_WORLDDIR/usr
 prune_usr() {
 	# Remove all empty directories in /usr
 	find "${NANO_WORLDDIR}"/usr -type d -depth -print |
@@ -694,6 +739,11 @@ prune_usr() {
 		done
 }
 
+#
+# Create a new UFS filesystem on a block device with an optional label,
+# and mount it async
+# Input: $1 = device, $2 = mount point, $3 = label suffix
+#
 newfs_part() {
 	local dev mnt lbl
 	dev=$1
@@ -704,6 +754,12 @@ newfs_part() {
 	mount -o async ${dev} ${mnt}
 }
 
+#
+# Run makefs to create a UFS filesystem image from a source directory
+# using a metalog spec and timestamp
+# Input: $1 = options, $2 = metalog path, $3 = size in sectors,
+# $4 = output image path, $5 = source dir
+#
 nano_makefs() {
 	local dir image metalog options size
 	options=$1
@@ -724,6 +780,11 @@ nano_umount() {
 	umount ${1}
 }
 
+#
+# Populate a partition from a source directory on a given device
+# Input: $1 = device, $2 = source dir (optional), $3 = mount point,
+# $4 = label suffix
+#
 populate_slice() {
 	local dev dir mnt lbl
 	dev=$1
@@ -745,7 +806,7 @@ populate_slice() {
 #
 # Create a UFS filesystem image from a directory
 # Input: $1 = type (cfg/data), $2 = output image path, $3 = source dir,
-# $4 = label, $5 = size in bytes, $6 = metalog
+# $4 = label, $5 = size in sectors, $6 = metalog
 #
 _populate_part() {
 	local dir fs lbl metalog size type
@@ -790,22 +851,44 @@ _populate_part() {
 	fi
 }
 
+#
+# Thin wrapper around populate_slice for the configuration partition
+# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
+#
 populate_cfg_slice() {
 	populate_slice "$1" "$2" "$3" "$4"
 }
 
+#
+# Thin wrapper around _populate_part for creating
+# the configuration partition image file
+# Input: $1 = image path, $2 = source dir, $3 = label, $4 = size in sectors,
+# $5 = metalog
+#
 _populate_cfg_part() {
 	_populate_part "cfg" "$1" "$2" "$3" "$4" "$5"
 }
 
+#
+# Thin wrapper around populate_slice for the data partition
+# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
+#
 populate_data_slice() {
 	populate_slice "$1" "$2" "$3" "$4"
 }
 
+#
+# Thin wrapper around _populate_part for creating the data partition image file
+# Input: $1 = image path, $2 = source dir, $3 = label, $4 = size, $5 = metalog
+#
 _populate_data_part() {
 	_populate_part "data" "$1" "$2" "$3" "$4" "$5"
 }
 
+#
+# Placeholder hook called after image build completes;
+# override to copy or publish the finished image
+#
 last_orders() {
 	# Redefine this function with any last orders you may have
 	# after the build completed, for instance to copy the finished
@@ -824,6 +907,11 @@ last_orders() {
 # Common Flash device geometries
 #
 
+#
+# Source FlashDevice.sub and call sub_FlashDevice to set NANO_MEDIASIZE
+# and geometry vars for a named flash device
+# Input: $1 = flash device name, $2 = size variant
+#
 FlashDevice() {
 	if [ -d ${NANO_TOOLS} ]; then
 		. ${NANO_TOOLS}/FlashDevice.sub
@@ -853,6 +941,11 @@ FlashDevice() {
 # The generic-hdd device is preferred for flash devices larger than 1GB.
 #
 
+#
+# Set NANO_HEADS, NANO_SECTS, and NANO_MEDIASIZE for a USB device based
+# on type (generic-fdd/generic-hdd) and advertised MB capacity
+# Input: $1 = device type string, $2 = size in MB
+#
 UsbDevice() {
 	local a1=$(echo $1 | tr '[:upper:]' '[:lower:]')
 	case $a1 in
@@ -916,6 +1009,10 @@ cust_install_files() (
 #######################################################################
 # Install packages from ${NANO_PACKAGE_DIR}
 
+#
+# Bootstrap pkg and install all packages from NANO_PACKAGE_DIR
+# into NANO_WORLDDIR via a nullfs-mounted chroot
+#
 cust_pkgng() {
 	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
 	local PKG_CONF="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
@@ -985,6 +1082,11 @@ cust_pkgng() {
 #	Register all args as early customize function to run just before
 #	build commences.
 
+#
+# Register one or more function names to run before buildworld
+# by appending them to NANO_EARLY_CUSTOMIZE
+# Input: $* = function name(s)
+#
 early_customize_cmd() {
 	NANO_EARLY_CUSTOMIZE="$NANO_EARLY_CUSTOMIZE $*"
 }
@@ -993,6 +1095,11 @@ early_customize_cmd() {
 # Convenience function:
 # 	Register all args as customize function.
 
+#
+# Register one or more function names to run after installworld/installkernel
+# by appending them to NANO_CUSTOMIZE
+# Input: $* = function name(s)
+#
 customize_cmd() {
 	NANO_CUSTOMIZE="$NANO_CUSTOMIZE $*"
 }
@@ -1002,6 +1109,11 @@ customize_cmd() {
 # 	Register all args as late customize function to run just before
 #	image creation.
 
+#
+# Register one or more function names to run just before image creation
+# by appending them to NANO_LATE_CUSTOMIZE
+# Input: $* = function name(s)
+#
 late_customize_cmd() {
 	NANO_LATE_CUSTOMIZE="$NANO_LATE_CUSTOMIZE $*"
 }
@@ -1024,6 +1136,7 @@ pprint() {
     fi
 }
 
+# Print the nanobsd.sh command-line option summary to stderr, exit with code 2
 usage() {
 	(
 	echo "Usage: $0 [-BbfhIiKknpqUvWwX] [-c config_file]"
@@ -1052,6 +1165,10 @@ usage() {
 # Setup and Export Internal variables
 #
 
+#
+# Export a variable and log its current value at verbosity level 3 via pprint
+# Input: $1 = variable name
+#
 export_var() {
 	var=$1
 	# Lookup value of the variable.
