@@ -471,6 +471,11 @@ nano_pkgbase_kernel_list() {
 	echo "$list"
 }
 
+# Remove the existing NANO_METALOG file to generate new metalog
+nano_pkgbase_reset_metalog() {
+	rm -f "$NANO_METALOG"
+}
+
 #
 # Update the sha256 checksum of a file in the target pkg database to match the current file on disk
 # Input: $1 = file path relative to NANO_WORLDDIR
@@ -500,7 +505,16 @@ pkg_cmd() {
 
 # Run pkg(8) with NANO_WORLDDIR as rootdir
 tgt_pkg() {
-	pkg_cmd --rootdir "$NANO_WORLDDIR" "$@"
+	local install_as_user metalog
+
+	if ! $do_root; then
+		install_as_user="-o INSTALL_AS_USER=yes"
+	fi
+	if [ -n "$NANO_METALOG" ]; then
+		metalog="-o METALOG=${NANO_METALOG}"
+	fi
+
+	pkg_cmd --rootdir "$NANO_WORLDDIR" ${install_as_user} ${metalog} "$@"
 }
 
 # Run pkg(8) in chroot mode against NANO_WORLDDIR
@@ -665,6 +679,18 @@ tgt_touch() (
 )
 
 #
+# Update the path the files table of the target pkg database from
+# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
+#
+tgt_pkg_update_file_path_etc_local() {
+	tgt_pkg shell <<-EOF
+		UPDATE files
+		SET path = '/etc/local' || SUBSTR(path, 15)
+		WHERE path LIKE '/usr/local/etc%';
+	EOF
+}
+
+#
 # Convert a directory into a symlink. Takes three arguments, the current
 # directory, what it should become a symlink to, and optionally, the mode.
 # The directory is removed and a symlink is created. If we're doing
@@ -676,12 +702,25 @@ tgt_dir2symlink() (
 	local mode=${3:-0777}
 
 	cd "${NANO_WORLDDIR}"
+
 	rm -xrf "$dir"
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg shell <<-EOF
+			DELETE FROM directories WHERE path = '$dir';
+		EOF
+	fi
+
 	ln -sf "$symlink" "$dir"
 	if [ -n "$NANO_METALOG" ]; then
 		printf "./%s type=link uname=%s gname=%s mode=%s link=%s\n" \
 		    "$dir" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" \
 		    "$symlink" >> "$NANO_METALOG"
+	fi
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg shell <<-EOF
+			INSERT INTO files (path, uname, gname, perm, fflags, symlink_target)
+			VALUES ('$dir', '$NANO_DEF_UNAME', '$NANO_DEF_GNAME', '$mode', 0, '$symlink');
+		EOF
 	fi
 )
 
@@ -694,14 +733,29 @@ tgt_dir() {
 		mkdir -p "${NANO_WORLDDIR}/${i}"
 
 		if [ -n "$NANO_METALOG" ]; then
-			path=""
-			for dir in $(echo "$i" | tr "/" " "); do
-				path="${path}/${dir}"
-				echo ".${path} type=dir uname=${NANO_DEF_UNAME}" \
-				    "gname=${NANO_DEF_GNAME} mode=0755" >> "${NANO_METALOG}"
-			done
+			mtree_walk "$i"
 		fi
 	done
+}
+
+#
+# Generate metalog entries for each intermediate directory in a path.
+# Assume default ownership and directory permissions
+#
+mtree_walk() {
+	local dir oifs path
+
+	dir="$1"
+	path=""
+
+	oifs="$IFS"
+	IFS="/"
+	for d in $dir; do
+		path="${path}/${d}"
+		printf ".%s type=dir uname=%s gname=%s mode=0755\n" \
+		    "$path" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$NANO_METALOG"
+	done
+	IFS="$oifs"
 }
 
 #
@@ -876,7 +930,7 @@ install_precompiled_world() {
 		if [ -n "$(nano_pkgbase_world_list)" ]; then
 			tgt_pkg install -U -y $(nano_pkgbase_world_list)
 		fi
-		tgt_pkg_chroot triggers
+		_xxx_tgt_pkg_triggers
 	else
 		for distset in $NANO_DISTRIBUTIONS; do
 			if [ "$distset" = "kernel.txz" ] || \
@@ -1047,6 +1101,11 @@ fixup_before_diskimage() {
 	# The dedup tool's output must be sorted due to limitations in awk.
 	if [ -n "${NANO_METALOG}" ]; then
 		pprint 2 "Fixing metalog"
+
+		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+			_xxx_pkg_metalog
+		fi
+
 		cp ${NANO_METALOG} ${NANO_METALOG}.pre
 		echo "/set uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" > ${NANO_METALOG}
 		cat ${NANO_METALOG}.pre | ${NANO_TOOLS}/mtree-dedup.awk | \
@@ -1076,6 +1135,9 @@ setup_nanobsd() {
 		cd ..
 		rm -xrf etc
 		)
+		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+			tgt_pkg_update_file_path_etc_local
+		fi
 	fi
 
 	# Always setup the usr/local/etc -> etc/local symlink.
