@@ -1,0 +1,10 @@
+. type=dir uname=root gname=wheel mode=0755
+./usr type=dir uname=root gname=wheel mode=0755
+./usr/local type=dir uname=root gname=wheel mode=0755
+./usr/local/sbin type=dir uname=root gname=wheel mode=0755
+./usr/local/sbin/change_password type=file uname=root gname=wheel mode=0555
+./usr/local/sbin/save_cfg type=file uname=root gname=wheel mode=0555
+./usr/local/sbin/save_sshkeys type=file uname=root gname=wheel mode=0555
+./usr/local/sbin/update type=file uname=root gname=wheel mode=0555
+./usr/local/sbin/updatep1 type=file uname=root gname=wheel mode=0555
+./usr/local/sbin/updatep2 type=file uname=root gname=wheel mode=0555
