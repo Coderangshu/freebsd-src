@@ -112,8 +112,17 @@ NANO_MAKEFS="-o bsize=4096,density=8192,fsize=512,softupdates=1,version=2"
 # The drive name of the media at runtime
 NANO_DRIVE=ada0
 
-# Target media size in 512 bytes sectors
-NANO_MEDIASIZE=4000000
+#
+# Sector size in bytes.
+# Accepts suffixes and products (4k, 1M, 4x1024)
+#
+NANO_SECTOR_SIZE=512
+
+#
+# Target media size in bytes.
+# Commercial storage capacities are specified using SI decimal units
+#
+NANO_MEDIASIZE="2G"
 
 # Number of code images on media (1 or 2)
 NANO_IMAGES=2
@@ -122,24 +131,30 @@ NANO_IMAGES=2
 # 1 -> Initialize second image with a copy of the first
 NANO_INIT_IMG2=1
 
-# Size of code file system in 512 bytes sectors
+#
+# Size of code file system in bytes
 # If zero, size will be as large as possible.
 NANO_CODESIZE=0
 
-# Size of configuration file system in 512 bytes sectors
+#
+# Size of configuration file system in bytes
 # Cannot be zero.
-NANO_CONFSIZE=2048
+#
+NANO_CONFSIZE="1Mi"
 
-# Size of data file system in 512 bytes sectors
+# Size of data file system in bytes
 # If zero: no partition configured.
 # If negative: max size possible
 NANO_DATASIZE=0
 
-# Size of the /etc ramdisk in 512 bytes sectors
-NANO_RAM_ETCSIZE=10240
+# Size of the /etc ramdisk in bytes
+NANO_RAM_ETCSIZE="5Mi"
 
-# Size of the /tmp+/var ramdisk in 512 bytes sectors
-NANO_RAM_TMPVARSIZE=10240
+# Size of the /tmp+/var ramdisk in bytes
+NANO_RAM_TMPVARSIZE="40Mi"
+
+# Size of swap partition in bytes
+NANO_SWAP_SIZE=0
 
 # boot0 flags/options and configuration
 NANO_BOOT0CFG="-o packet -s 1 -m 3"
@@ -155,6 +170,9 @@ NANO_MD_BACKING="file"
 
 # for swap type md(4) backing, write out the mbr only
 NANO_IMAGE_MBRONLY=true
+
+# EFI System Partition size in bytes
+NANO_EFI_BOOTPART_SIZE="260Mi"
 
 # Progress Print level
 PPLEVEL=3
@@ -1316,8 +1334,9 @@ setup_nanobsd() {
 		rm -f "${NANO_METALOG}.conf"
 	fi
 
-	echo "$NANO_RAM_ETCSIZE" > conf/base/etc/md_size
-	echo "$NANO_RAM_TMPVARSIZE" > conf/base/var/md_size
+	# Size of the memory disk in 512-byte sectors, per diskless(8)
+	echo "$(( NANO_RAM_ETCSIZE / 512 ))" > conf/base/etc/md_size
+	echo "$(( NANO_RAM_TMPVARSIZE / 512 ))" > conf/base/var/md_size
 	tgt_touch conf/base/etc/md_size
 	tgt_touch conf/base/var/md_size
 
@@ -1439,7 +1458,7 @@ newfs_part() {
 #
 # Run makefs to create a UFS filesystem image from a source directory
 # using a metalog spec and timestamp
-# Input: $1 = options, $2 = metalog path, $3 = size in sectors,
+# Input: $1 = options, $2 = metalog path, $3 = size in bytes,
 # $4 = output image path, $5 = source dir
 #
 nano_makefs() {
@@ -1450,8 +1469,13 @@ nano_makefs() {
 	image=$4
 	dir=$5
 
-	makefs -t ffs ${options} -F "${metalog}" -N "${NANO_WORLDDIR}/etc" \
-	    -R "${size}b" -T "${NANO_TIMESTAMP}" "${image}" "${dir}"
+	if [ -n "$metalog" ] && [ -f "$metalog" ]; then
+		makefs -t ffs -DxZ ${options} -F "$metalog" -N "${NANO_WORLDDIR}/etc" \
+		    -R "$size" -T "$NANO_TIMESTAMP" "$image" "$dir"
+	else
+		makefs -t ffs -Z ${options} -N "${NANO_WORLDDIR}/etc" \
+		    -R "$size" -T "$NANO_TIMESTAMP" "$image" "$dir"
+	fi
 }
 
 #
@@ -1488,7 +1512,7 @@ populate_slice() {
 #
 # Create a UFS filesystem image from a directory
 # Input: $1 = type (cfg/data), $2 = output image path, $3 = source dir,
-# $4 = label, $5 = size in sectors, $6 = metalog
+# $4 = label, $5 = size in bytes, $6 = metalog
 #
 _populate_part() {
 	local dir fs lbl metalog size type
@@ -1529,13 +1553,14 @@ _populate_part() {
 			)
 		fi
 
-		nano_makefs "-DxZ ${NANO_MAKEFS}" "${metalog}" "${size}" "${fs}" "${dir}"
+		nano_makefs "$NANO_MAKEFS" "$metalog" "$size" "$fs" "$dir"
 	fi
 }
 
 #
-# Thin wrapper around populate_slice for the configuration partition
-# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
+# Thin wrapper around populate_part for creating
+# the configuration partition image file
+# Input: $1 = image path, $2 = source dir, $3 = label, $4 = size, $5 = metalog
 #
 populate_cfg_slice() {
 	populate_slice "$1" "$2" "$3" "$4"
@@ -1640,12 +1665,12 @@ UsbDevice() {
 	generic-fdd)
 		NANO_HEADS=64
 		NANO_SECTS=32
-		NANO_MEDIASIZE=$(( $2 * 1000 * 1000 / 512 ))
+		NANO_MEDIASIZE="${2}m"
 		;;
 	generic|generic-hdd)
 		NANO_HEADS=255
 		NANO_SECTS=63
-		NANO_MEDIASIZE=$(( $2 * 1000 * 1000 / 512 ))
+		NANO_MEDIASIZE="${2}m"
 		;;
 	*)
 		err "Unknown USB flash device"
@@ -1653,25 +1678,60 @@ UsbDevice() {
 	esac
 }
 
-#######################################################################
-# Setup serial console
+#
+# Convert a human-readable size string with a suffix into bytes.
+# Inspired by NetBSD's strsuftoll(3), humanize_number(3), and
+# newfs_msdos(8) argtooff().
+#
+# Supported suffixes:
+#   k,m,g,t,p,e        SI units (1000^n)
+#   ki,mi,gi,ti,pi,ei  IEC units (1024^n)
+#   s                  NANO_SECTOR_SIZE-byte blocks (Default: 512 bytes)
+#   w                  sizeof(int) (4 bytes)
+#
+# Also accepts "x"-delimited products followed by a suffix
+# (e.g., "2x1024k", "4x512ki").
+#
+# Output: byte count
+#
+strtobytes() {
+	local input num result suffix
 
-# Enable serial console in /etc/ttys and write NANO_BOOT2CFG to /boot.config
-cust_comconsole() {
-	# Enable getty on console
-	sed -i "" -e '/^tty[du]0/s/off/onifconsole/' ${NANO_WORLDDIR}/etc/ttys
+	case "$1" in
+		*[0-9a-zA-Z][Bb]) input=${1%?} ;;
+		*) input=$1 ;;
+	esac
 
-	# Disable getty on syscons internal console
-	sed -i "" -e '/^ttyv0/s/on/off/' ${NANO_WORLDDIR}/etc/ttys
+	case "$input" in
+	*[Kk][Ii]) num=${input%??}; suffix=ki ;;
+	*[Mm][Ii]) num=${input%??}; suffix=mi ;;
+	*[Gg][Ii]) num=${input%??}; suffix=gi ;;
+	*[Tt][Ii]) num=${input%??}; suffix=ti ;;
+	*[Pp][Ii]) num=${input%??}; suffix=pi ;;
+	*[Ee][Ii]) num=${input%??}; suffix=ei ;;
+	*) num=${input%?}; suffix=${input#"${num}"} ;;
+	esac
 
-	# Tell loader to use serial console
-	echo "${NANO_BOOT2CFG}" > ${NANO_WORLDDIR}/boot.config
-	tgt_touch boot.config
+	case "$suffix" in
+	[kK]) result="${num}x1000^1" ;;
+	[mM]) result="${num}x1000^2" ;;
+	[gG]) result="${num}x1000^3" ;;
+	[tT]) result="${num}x1000^4" ;;
+	[pP]) result="${num}x1000^5" ;;
+	[eE]) result="${num}x1000^6" ;;
+	ki) result="${num}x1024^1" ;;
+	mi) result="${num}x1024^2" ;;
+	gi) result="${num}x1024^3" ;;
+	ti) result="${num}x1024^4" ;;
+	pi) result="${num}x1024^5" ;;
+	ei) result="${num}x1024^6" ;;
+	[sS]) result="${num}x${NANO_SECTOR_SIZE:-512}" ;;
+	[wW]) result="${num}x4" ;;	# sizeof(int)
+	[0-9]) result="$input" ;;
+	*) err "'$1': illegal number" ;;
+	esac
 
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg_update_file_sha256 etc/ttys
-		tgt_pkg_update_config_files_content etc/ttys
-	fi
+	printf "%s" "$(printf 'scale=0; %s\n' "$result" | tr 'x' '*' | bc)"
 }
 
 #######################################################################
@@ -1924,43 +1984,80 @@ set_defaults_and_export() {
 		done
 	fi
 
+	#
+	# Keep legacy sizes in 512-byte sectors, except for variables
+	# in this file, which require sizes in bytes
+	#
+	if [ "$NANO_PLAN" = "legacy" ]; then
+		NANO_RAM_ETCSIZE=$(strtobytes "${NANO_RAM_ETCSIZE:-0}s")
+		NANO_RAM_TMPVARSIZE=$(strtobytes "${NANO_RAM_TMPVARSIZE:-0}s")
+		NANO_SWAP_SIZE=0
+	else
+		NANO_MEDIASIZE=$(strtobytes "${NANO_MEDIASIZE:-0}")
+		NANO_CODESIZE=$(strtobytes "${NANO_CODESIZE:-0}")
+		NANO_CONFSIZE=$(strtobytes "${NANO_CONFSIZE:-1Mi}")
+		NANO_DATASIZE=$(strtobytes "${NANO_DATASIZE:-0}")
+		NANO_RAM_ETCSIZE=$(strtobytes "${NANO_RAM_ETCSIZE:-0}")
+		NANO_RAM_TMPVARSIZE=$(strtobytes "${NANO_RAM_TMPVARSIZE:-0}")
+		NANO_SWAP_SIZE=$(strtobytes "${NANO_SWAP_SIZE:-0}")
+		NANO_EFI_BOOTPART_SIZE=$(strtobytes "${NANO_EFI_BOOTPART_SIZE:-0}")
+	fi
+
 	NANO_STARTTIME=$(date +%s)
-	: ${NANO_TIMESTAMP:=${NANO_STARTTIME}}
+	: "${NANO_TIMESTAMP:=${NANO_STARTTIME}}"
+
+	if [ "$NANO_PLAN" = "legacy" ]; then
+		pprint 3 "Exporting Legacy NanoBSD variables"
+		export_var NANO_BOOT0CFG
+		export_var NANO_HEADS
+		export_var NANO_NEWFS
+		export_var NANO_SECTS
+	fi
+
 	pprint 3 "Exporting NanoBSD variables"
 	export_var MAKEOBJDIRPREFIX
 	export_var NANO_ARCH
+	export_var NANO_BOOTLOADER
 	export_var NANO_CODESIZE
 	export_var NANO_CONFSIZE
 	export_var NANO_CUSTOMIZE
 	export_var NANO_DATASIZE
 	export_var NANO_DRIVE
-	export_var NANO_HEADS
+	export_var NANO_EFI_BOOTPART_SIZE
 	export_var NANO_IMAGES
-	export_var NANO_IMGNAME
 	export_var NANO_IMG1NAME
+	export_var NANO_IMGNAME
+	export_var NANO_LABEL
+	export_var NANO_LOG
 	export_var NANO_MAKE
 	export_var NANO_MAKEFS
 	export_var NANO_MAKE_CONF_BUILD
 	export_var NANO_MAKE_CONF_INSTALL
 	export_var NANO_MEDIASIZE
+	export_var NANO_METALOG
+	export_var NANO_MODULES
 	export_var NANO_NAME
 	export_var NANO_NCPU
-	export_var NANO_NEWFS
+	export_var NANO_NOPKGBASE
+	export_var NANO_NOPRIV_BUILD
 	export_var NANO_OBJ
+	export_var NANO_PLAN
 	export_var NANO_PMAKE
-	export_var NANO_SECTS
+	export_var NANO_RAM_ETCSIZE
 	export_var NANO_SRC
 	export_var NANO_TIMESTAMP
+	export_var NANO_RAM_TMPVARSIZE
 	export_var NANO_TOOLS
 	export_var NANO_WORLDDIR
-	export_var NANO_BOOT0CFG
-	export_var NANO_BOOTLOADER
-	export_var NANO_LABEL
-	export_var NANO_MODULES
-	export_var NANO_NOPRIV_BUILD
-	export_var NANO_METALOG
-	export_var NANO_NOPKGBASE
-	export_var NANO_LOG
 	export_var SRCCONF
 	export_var SRC_ENV_CONF
+
+	if [ -n "$NANO_CUSTOMIZE" ]; then
+		pprint 3 "Exporting NanoBSD customization variables"
+		export_var NANO_BOOT2CFG
+		export_var NANO_CUST_FILESDIR
+		export_var NANO_CUST_FILES_MTREE
+		export_var NANO_PACKAGE_LIST
+		export_var NANO_PKG_META_BASE
+	fi
 }
