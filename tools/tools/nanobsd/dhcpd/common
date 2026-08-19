@@ -34,6 +34,8 @@
 
 # NB: You want the other file
 
+legacy
+
 NANO_PMAKE="make -j $(sysctl -n hw.ncpu)"
 
 NANO_CFG_BASE=$(pwd)
