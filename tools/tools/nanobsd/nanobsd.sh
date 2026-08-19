@@ -204,7 +204,9 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
-if $do_precompiled; then
+if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+	nano_configure_pkgbase_pkg
+else
 	nano_fetch_distsets
 fi
 
@@ -237,7 +239,8 @@ else
 	pprint 2 "Skipping installkernel (as instructed)"
 fi
 
-if $do_precompiled && ($do_installworld || $do_installkernel); then
+if $do_precompiled && [ -n "$NANO_NOPKGBASE" ] && \
+    ($do_installworld || $do_installkernel); then
 	patch_precompiled
 fi
 
