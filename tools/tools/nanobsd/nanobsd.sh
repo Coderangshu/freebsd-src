@@ -28,6 +28,25 @@
 
 set -e
 
+legacy() {
+	# Pull in legacy stuff on demand
+	. "${topdir}/legacy.sh"
+	NANO_PLAN="legacy"
+}
+
+default() {
+	# Pull in default stuff on demand
+	. "${topdir}/gpt.sh"
+	NANO_PLAN="${NANO_PLAN:-default}"
+}
+
+is_defined() {
+	case $(type $1 2>/dev/null) in
+	*function) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 nanobsd_sh=$(realpath $0)
 topdir=$(dirname ${nanobsd_sh})
 . "${topdir}/_xxx_includes.subr"

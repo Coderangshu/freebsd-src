@@ -51,6 +51,8 @@ NANO_PACKAGE_LIST="*"
 # where package metadata gets placed
 NANO_PKG_META_BASE=/var/db
 
+# Path to the files directory used by cust_install_files()
+NANO_CUST_FILESDIR="${NANO_TOOLS}/Files"
 # Path to mtree file to apply to anything copied by cust_install_files().
 # If you specify this, the mtree file *must* have an entry for every file and
 # directory located in Files.
@@ -105,9 +107,8 @@ NANO_CUSTOMIZE=""
 # Late customize commands.
 NANO_LATE_CUSTOMIZE=""
 
-# Newfs parameters to use
-NANO_NEWFS="-b 4096 -f 512 -i 8192 -U"
-NANO_MAKEFS="-o bsize=4096,density=8192,fsize=512,softupdates=1,version=2"
+# makefs parameters to use
+NANO_MAKEFS="-o softupdates=1,version=2"
 
 # The drive name of the media at runtime
 NANO_DRIVE=ada0
@@ -127,13 +128,16 @@ NANO_MEDIASIZE="2G"
 # Number of code images on media (1 or 2)
 NANO_IMAGES=2
 
+#
 # 0 -> Leave second image all zeroes so it compresses better.
 # 1 -> Initialize second image with a copy of the first
+#
 NANO_INIT_IMG2=1
 
 #
 # Size of code file system in bytes
 # If zero, size will be as large as possible.
+#
 NANO_CODESIZE=0
 
 #
@@ -156,41 +160,18 @@ NANO_RAM_TMPVARSIZE="40Mi"
 # Size of swap partition in bytes
 NANO_SWAP_SIZE=0
 
-# boot0 flags/options and configuration
-NANO_BOOT0CFG="-o packet -s 1 -m 3"
-NANO_BOOTLOADER="boot/boot0sio"
+# Swap partition encryption
+NANO_SWAP_ENCRYPTION=""
 
 # boot2 flags/options
 # default force serial console
 NANO_BOOT2CFG="-h -S115200"
-
-# Backing type of md(4) device
-# Can be "file" or "swap"
-NANO_MD_BACKING="file"
-
-# for swap type md(4) backing, write out the mbr only
-NANO_IMAGE_MBRONLY=true
 
 # EFI System Partition size in bytes
 NANO_EFI_BOOTPART_SIZE="260Mi"
 
 # Progress Print level
 PPLEVEL=3
-
-# Set NANO_LABEL to non-blank to form the basis for using /dev/ufs/label
-# in preference to /dev/${NANO_DRIVE}
-# Root partition will be ${NANO_LABEL}s{1,2}
-# /cfg partition will be ${NANO_LABEL}s3
-# /data partition will be ${NANO_LABEL}s4
-NANO_LABEL=""
-NANO_SLICE_ROOT=s1
-NANO_SLICE_ALTROOT=s2
-NANO_SLICE_CFG=s3
-NANO_SLICE_DATA=s4
-NANO_PARTITION_ROOT=a
-NANO_PARTITION_ALTROOT=a
-NANO_ROOT=s1a
-NANO_ALTROOT=s2a
 
 # Default ownership for nopriv build
 NANO_DEF_UNAME=root
@@ -542,43 +523,48 @@ tgt_pkg_update_config_files_content() {
 }
 
 #
-# Update the path the files table of the target pkg database from
-# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
+# Swap the dir ID with the symlink ID in the pkg_directories table.
+# Remove the dir ID from the directories table
 #
-tgt_pkg_update_file_path_etc_local() {
-	tgt_pkg shell <<-EOF
-		UPDATE files
-		SET path = '/etc/local' || SUBSTR(path, 15)
-		WHERE path LIKE '/usr/local/etc%';
-	EOF
-}
+tgt_pkg_rm_dir2symlink() {
+	local dir dir_id realpath_target symlink symlink_id update_stmt
 
-#
-# Swap the /tmp ID with the /var/tmp ID in the pkg_directories table.
-# Remove the /tmp directory from the directories table.
-#
-tgt_pkg_link_tmp_var_tmp() {
-	local tmp_id var_tmp_id
+	dir="$1"
+	symlink="$2"
 
-	tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/tmp';")
-	var_tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/var/tmp';")
+	# Resolve the symlink's target destination to query the database
+	realpath_target=$(realpath -q "${NANO_WORLDDIR}/${dir}/../${symlink}")
+	realpath_target="${realpath_target#$NANO_WORLDDIR}"
 
-	if [ -z "$tmp_id" ] || [ -z "$var_tmp_id" ]; then
-		return
+	if [ -n "$realpath_target" ]; then
+		symlink_id=$(tgt_pkg shell "SELECT id FROM directories
+		    WHERE path = '${realpath_target}';")
+	fi
+	dir_id=$(tgt_pkg shell "SELECT id FROM directories
+	    WHERE path = '/${dir}';")
+	if [ -z "$dir_id" ]; then
+		return 0
+	fi
+
+	# Change any package relation from the dir ID to the symlink ID (if any)
+	if [ -n "$symlink_id" ]; then
+		update_stmt="UPDATE OR IGNORE pkg_directories
+		    SET directory_id = ${symlink_id}
+		    WHERE directory_id = ${dir_id};"
+	else
+		update_stmt="-- Skip UPDATE: symlink_id is empty"
 	fi
 
 	tgt_pkg shell <<-EOF
 		BEGIN TRANSACTION;
 
-		-- Change any package relation from the /tmp ID to the /var/tmp ID
-		UPDATE OR IGNORE pkg_directories
-		SET directory_id = ${var_tmp_id} WHERE directory_id = ${tmp_id};
+		${update_stmt}
 
-		-- Remove residual /tmp remnants left behind by "OR IGNORE"
-		DELETE FROM pkg_directories WHERE directory_id = ${tmp_id};
+		-- Remove residual dir ID remnants left behind by "OR IGNORE"
+		DELETE FROM pkg_directories WHERE directory_id = ${dir_id};
 
-		-- Remove /tmp from the directories table
-		DELETE FROM directories WHERE id = ${tmp_id};
+		-- Remove dir ID from the directories table
+		DELETE FROM directories WHERE id = ${dir_id};
 
 		COMMIT;
 	EOF
@@ -587,7 +573,7 @@ tgt_pkg_link_tmp_var_tmp() {
 # Timestamp all files with NANO_TIMESTAMP in the pkg database
 tgt_pkg_time_timestamp() {
 	if [ -z "$NANO_TIMESTAMP" ]; then
-		return
+		return 0
 	fi
 
 	tgt_pkg shell "UPDATE files SET mtime = ${NANO_TIMESTAMP};"
@@ -602,6 +588,7 @@ pkg_cmd() {
 	    -o IGNORE_OSVERSION=yes \
 	    -o OSVERSION="$NANO_OSVERSION" \
 	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" \
+	    -o PKG_DBDIR="${NANO_WORLDDIR}/var/db/pkg" \
 	    "$@"
 }
 
@@ -673,7 +660,7 @@ EOF
 	# XXX: Add support for fingerprints in FreeBSD-local.conf
 	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
 FreeBSD-local: {
-  url: "file:///$(nano_pkg_cachedir)",
+  url: "file://$(nano_pkg_cachedir)",
   enabled: no
 }
 EOF
@@ -823,24 +810,13 @@ tgt_touch() (
 )
 
 #
-# Update the path the files table of the target pkg database from
-# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
-#
-tgt_pkg_update_file_path_etc_local() {
-	tgt_pkg shell <<-EOF
-		UPDATE files
-		SET path = '/etc/local' || SUBSTR(path, 15)
-		WHERE path LIKE '/usr/local/etc%';
-	EOF
-}
-
-#
 # Convert a directory into a symlink. Takes three arguments, the current
 # directory, what it should become a symlink to, and optionally, the mode.
 # The directory is removed and a symlink is created. If we're doing
 # a nopriv build, then append this fact to the metalog
 #
-tgt_dir2symlink() (
+tgt_dir2symlink() {
+	(
 	local dir=$1
 	local symlink=$2
 	local mode=${3:-0777}
@@ -848,25 +824,22 @@ tgt_dir2symlink() (
 	cd "${NANO_WORLDDIR}"
 
 	rm -xrf "$dir"
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg shell <<-EOF
-			DELETE FROM directories WHERE path = '$dir';
-		EOF
+	if [ -n "$NANO_METALOG" ]; then
+		sed -i "" "\=^\./${dir} =d" "$NANO_METALOG"
+	fi
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_rm_dir2symlink "$dir" "$symlink" || true
 	fi
 
 	ln -sf "$symlink" "$dir"
+	chmod "$mode" "$dir"
 	if [ -n "$NANO_METALOG" ]; then
 		printf "./%s type=link uname=%s gname=%s mode=%s link=%s\n" \
 		    "$dir" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" \
 		    "$symlink" >> "$NANO_METALOG"
 	fi
-	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg shell <<-EOF
-			INSERT INTO files (path, uname, gname, perm, fflags, symlink_target)
-			VALUES ('$dir', '$NANO_DEF_UNAME', '$NANO_DEF_GNAME', '$mode', 0, '$symlink');
-		EOF
-	fi
-)
+	)
+}
 
 #
 # Generate metalog entries for each intermediate directory in a path.
@@ -922,8 +895,7 @@ tgt_rm() {
 # Switch the current root partition in the target file system tab.
 # Input: $1 = current root partition, $2 = new root partition
 #
-tgt_switch_root_fstab()
-{
+tgt_switch_root_fstab() {
 	local current new
 	current="$1"
 	new="$2"
@@ -1290,8 +1262,13 @@ setup_nanobsd() {
 			sed -i "" "\=^\./usr/local/etc =d" "$NANO_METALOG"
 			sed -i "" -e "s=^\./usr/local/etc/=./etc/local/=g" "$NANO_METALOG"
 		fi
-		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-			tgt_pkg_update_file_path_etc_local
+		if [ -z "$NANO_NOPKGBASE" ]; then
+			tgt_pkg shell "UPDATE directories
+			    SET path = '/etc/local'
+			    WHERE path = '/usr/local/etc';"
+			tgt_pkg shell "UPDATE files
+			    SET path = '/etc/local' || SUBSTR(path, 15)
+			    WHERE path LIKE '/usr/local/etc%';"
 		fi
 	fi
 
@@ -1306,6 +1283,9 @@ setup_nanobsd() {
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		nano_pkg_disable_repos
 	fi
+
+	# Put /tmp on the /var ramdisk
+	tgt_dir2symlink tmp var/tmp 1777
 
 	if [ -n "$NANO_METALOG" ]; then
 		_xxx_pkg_add_var_db_files_to_metalog
@@ -1340,19 +1320,11 @@ setup_nanobsd() {
 	tgt_touch conf/base/etc/md_size
 	tgt_touch conf/base/var/md_size
 
-	# Pick up config files from the special partition
-	echo "mount -o ro /dev/${NANO_DRIVE}${NANO_SLICE_CFG}" > conf/default/etc/remount
-	tgt_touch conf/default/etc/remount
+	# Add the /conf/default/etc/remount file
+	tgt_etc_remount
 
-	# Put /tmp on the /var ramdisk (it may already be symlinked)
-	if [ -n "$NANO_METALOG" ]; then
-		sed -i "" "\=^\./tmp =d" "$NANO_METALOG"
-	fi
-	tgt_dir2symlink tmp var/tmp 1777
-	if [ -z "$NANO_NOPKGBASE" ]; then
-		tgt_pkg_link_tmp_var_tmp
-	fi
-
+	# Make sure that firstboot scripts run so growfs works
+	tgt_touch firstboot
 	) > ${NANO_LOG}/_.dl 2>&1
 }
 
@@ -1399,6 +1371,8 @@ entropy_file="NO"	# Disable late (used when going multi-user)
 			# entropy through reboots.
 entropy_dir="NO"	# Disable caching entropy via cron.
 dumpdev="NO"		# Disable dumpdev.
+growfs_enable="YES"	# Attempt to grow the root filesystem on boot.
+growfs_swap_size="${NANO_SWAP_SIZE}"	# Size in bytes to specify swap size.
 
 ##############################################################
 .
@@ -1414,18 +1388,53 @@ EOF
 		tgt_pkg_update_config_files_content etc/defaults/rc.conf
 	fi
 
-	# Save config file for scripts
-	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
-	tgt_touch etc/nanobsd.conf
-
-	echo "/dev/${NANO_DRIVE}${NANO_ROOT} / ufs ro 1 1" > etc/fstab
-	echo "/dev/${NANO_DRIVE}${NANO_SLICE_CFG} /cfg ufs rw,noauto 2 2" >> etc/fstab
-	tgt_touch etc/fstab
+	tgt_write_fstab
 	tgt_dir cfg
 
 	# Create directory for eventual /usr/local/etc contents
 	tgt_dir etc/local
 	)
+}
+
+# Write to the /etc/fstab file
+printf_fstab() {
+	printf "%s\t\t%s\t%s\t%s\t\t%s\t%s\n" \
+	    "$1" "$2" "$3" "$4" "$5" "$6" >> ${NANO_WORLDDIR}/etc/fstab
+}
+
+get_uefi_bootname() {
+	case "$NANO_ARCH" in
+	amd64)   echo BOOTX64 ;;
+	aarch64) echo BOOTAA64 ;;
+	i386)    echo BOOTIA32 ;;
+	armv7)   echo BOOTARM ;;
+	riscv64) echo BOOTRISCV64 ;;
+	*)       err "Unsupported NANO_ARCH '${NANO_ARCH}'" ;;
+	esac
+}
+
+get_bootcode() {
+	local boot_type part_type
+	boot_type="$1"
+	part_type="$2"
+
+	case "$boot_type" in
+	[Bb][Ii][Oo][Ss])
+		case "$part_type" in
+		[Mm][Bb][Rr]) echo "boot/boot" ;;
+		[Gg][Pp][Tt]) echo "boot/gptboot" ;;
+		*) err "Unsupported BIOS partition type '${part_type}'" ;;
+		esac
+		;;
+	[Uu][Ee][Ff][Ii])
+		case "$part_type" in
+		[Gg][Pp][Tt]) echo "boot/gptboot.efi" ;;
+		[Zz][Ff][Ss]) echo "boot/loader.efi" ;;
+		*) err "Unsupported UEFI partition type '${part_type}'" ;;
+		esac
+		;;
+	*) err "Unsupported boot type '${boot_type}'" ;;
+	esac
 }
 
 # Remove all empty directories under NANO_WORLDDIR/usr
@@ -1438,21 +1447,6 @@ prune_usr() {
 			sed -i "" -e "\|^\.${d#"$NANO_WORLDDIR"} |d" "$NANO_METALOG"
 		fi
 	done
-}
-
-#
-# Create a new UFS filesystem on a block device with an optional label,
-# and mount it async
-# Input: $1 = device, $2 = mount point, $3 = label suffix
-#
-newfs_part() {
-	local dev mnt lbl
-	dev=$1
-	mnt=$2
-	lbl=$3
-	echo newfs ${NANO_NEWFS} ${NANO_LABEL:+-L${NANO_LABEL}${lbl}} ${dev}
-	newfs ${NANO_NEWFS} ${NANO_LABEL:+-L${NANO_LABEL}${lbl}} ${dev}
-	mount -o async ${dev} ${mnt}
 }
 
 #
@@ -1487,34 +1481,11 @@ nano_umount() {
 }
 
 #
-# Populate a partition from a source directory on a given device
-# Input: $1 = device, $2 = source dir (optional), $3 = mount point,
-# $4 = label suffix
-#
-populate_slice() {
-	local dev dir mnt lbl
-	dev=$1
-	dir=$2
-	mnt=$3
-	lbl=$4
-	echo "Creating ${dev} (mounting on ${mnt})"
-	newfs_part ${dev} ${mnt} ${lbl}
-	if [ -n "${dir}" -a -d "${dir}" ]; then
-		echo "Populating ${lbl} from ${dir}"
-		cd "${dir}"
-		find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
-		    cpio ${CPIO_SYMLINK} -dumpv ${mnt}
-	fi
-	df -i ${mnt}
-	nano_umount ${mnt}
-}
-
-#
 # Create a UFS filesystem image from a directory
 # Input: $1 = type (cfg/data), $2 = output image path, $3 = source dir,
 # $4 = label, $5 = size in bytes, $6 = metalog
 #
-_populate_part() {
+populate_part() {
 	local dir fs lbl metalog size type
 	type=$1
 	fs=$2
@@ -1562,34 +1533,16 @@ _populate_part() {
 # the configuration partition image file
 # Input: $1 = image path, $2 = source dir, $3 = label, $4 = size, $5 = metalog
 #
-populate_cfg_slice() {
-	populate_slice "$1" "$2" "$3" "$4"
+populate_cfg_part() {
+	populate_part "cfg" "$1" "$2" "$3" "$4" "$5"
 }
 
 #
-# Thin wrapper around _populate_part for creating
-# the configuration partition image file
-# Input: $1 = image path, $2 = source dir, $3 = label, $4 = size in sectors,
-# $5 = metalog
-#
-_populate_cfg_part() {
-	_populate_part "cfg" "$1" "$2" "$3" "$4" "$5"
-}
-
-#
-# Thin wrapper around populate_slice for the data partition
-# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
-#
-populate_data_slice() {
-	populate_slice "$1" "$2" "$3" "$4"
-}
-
-#
-# Thin wrapper around _populate_part for creating the data partition image file
+# Thin wrapper around populate_part for creating the data partition image file
 # Input: $1 = image path, $2 = source dir, $3 = label, $4 = size, $5 = metalog
 #
-_populate_data_part() {
-	_populate_part "data" "$1" "$2" "$3" "$4" "$5"
+populate_data_part() {
+	populate_part "data" "$1" "$2" "$3" "$4" "$5"
 }
 
 #
@@ -1614,68 +1567,6 @@ last_orders() {
 err() {
 	echo "$@" >&2
 	exit 2
-}
-
-#######################################################################
-# Common Flash device geometries
-#
-
-#
-# Source FlashDevice.sub and call sub_FlashDevice to set NANO_MEDIASIZE
-# and geometry vars for a named flash device
-# Input: $1 = flash device name, $2 = size variant
-#
-FlashDevice() {
-	if [ -d ${NANO_TOOLS} ]; then
-		. ${NANO_TOOLS}/FlashDevice.sub
-	else
-		. ${NANO_SRC}/${NANO_TOOLS}/FlashDevice.sub
-	fi
-	sub_FlashDevice $1 $2
-}
-
-#######################################################################
-# USB device geometries
-#
-# Usage:
-#	UsbDevice Generic 1000	# a generic flash key sold as having 1GB
-#
-# This function will set NANO_MEDIASIZE, NANO_HEADS and NANO_SECTS for you.
-#
-# Note that the capacity of a flash key is usually advertised in MB or
-# GB, *not* MiB/GiB. As such, the precise number of cylinders available
-# for C/H/S geometry may vary depending on the actual flash geometry.
-#
-# The following generic device layouts are understood:
-#  generic           An alias for generic-hdd.
-#  generic-hdd       255H 63S/T xxxxC with no MBR restrictions.
-#  generic-fdd       64H 32S/T xxxxC with no MBR restrictions.
-#
-# The generic-hdd device is preferred for flash devices larger than 1GB.
-#
-
-#
-# Set NANO_HEADS, NANO_SECTS, and NANO_MEDIASIZE for a USB device based
-# on type (generic-fdd/generic-hdd) and advertised MB capacity
-# Input: $1 = device type string, $2 = size in MB
-#
-UsbDevice() {
-	local a1=$(echo $1 | tr '[:upper:]' '[:lower:]')
-	case $a1 in
-	generic-fdd)
-		NANO_HEADS=64
-		NANO_SECTS=32
-		NANO_MEDIASIZE="${2}m"
-		;;
-	generic|generic-hdd)
-		NANO_HEADS=255
-		NANO_SECTS=63
-		NANO_MEDIASIZE="${2}m"
-		;;
-	*)
-		err "Unknown USB flash device"
-		;;
-	esac
 }
 
 #
@@ -1735,6 +1626,9 @@ strtobytes() {
 }
 
 #######################################################################
+# Setup serial console
+
+#######################################################################
 # Allow root login via ssh
 
 # Enable root login via SSH by setting PermitRootLogin yes in sshd_config
@@ -1752,17 +1646,25 @@ cust_allow_ssh_root() {
 # Install the stuff under ./Files
 
 # Copy all files from NANO_TOOLS/Files into NANO_WORLDDIR
-cust_install_files() (
-	cd "${NANO_TOOLS}/Files"
+cust_install_files() {
+	(
+	cd "$NANO_CUST_FILESDIR"
 	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
-	    cpio ${CPIO_SYMLINK} -Ldumpv ${NANO_WORLDDIR}
+	    cpio ${CPIO_SYMLINK} -Ldumpv "$NANO_WORLDDIR"
 
-	if [ -n "${NANO_CUST_FILES_MTREE}" -a -f ${NANO_CUST_FILES_MTREE} ]; then
-		CR "mtree -eiU -p /" <${NANO_CUST_FILES_MTREE}
+	if [ -n "$NANO_CUST_FILES_MTREE" ] && [ -f "$NANO_CUST_FILES_MTREE" ]; then
+		if [ -n "$NANO_NOPRIV_BUILD" ]; then
+			# Entries in NANO_CUST_FILES_MTREE must precede NANO_METALOG
+			cat "$NANO_CUST_FILES_MTREE" "$NANO_METALOG" > "${NANO_METALOG}.tmp"
+			mv "${NANO_METALOG}.tmp" "$NANO_METALOG"
+		else
+			CR "mtree -eiU -p /" <"$NANO_CUST_FILES_MTREE"
+		fi
+	else
+		tgt_touch $(find * -type f)
 	fi
-
-	tgt_touch $(find * -type f)
-)
+	)
+}
 
 #######################################################################
 # Install packages from ${NANO_PACKAGE_DIR}
@@ -1772,6 +1674,11 @@ cust_install_files() (
 # into NANO_WORLDDIR via a nullfs-mounted chroot
 #
 cust_pkgng() {
+	if ! $do_root && [ -n "$NANO_NOPRIV_BUILD" ]; then
+		pprint 2 'Skipping "cust_pkgng" (unprivileged builds not supported yet)'
+		return 0
+	fi
+
 	mkdir -p ${NANO_WORLDDIR}/usr/local/etc
 	local PKG_CONF="${NANO_WORLDDIR}/usr/local/etc/pkg.conf"
 	local PKGCMD="env BATCH=YES ASSUME_ALWAYS_YES=YES PKG_DBDIR=${NANO_PKG_META_BASE}/pkg SIGNATURE_TYPE=none /usr/sbin/pkg"
@@ -1886,11 +1793,11 @@ late_customize_cmd() {
 # Input: $1 = level, $2 = message
 #
 pprint() {
-    if [ "$1" -le $PPLEVEL ]; then
+	if [ "$1" -le $PPLEVEL ]; then
 		runtime=$(( $(date +%s) - NANO_STARTTIME ))
 		printf "%s %.${1}s %s\n" \
 		    "$(date -u -r $runtime +%H:%M:%S)" "#####" "$2" 1>&3
-    fi
+	fi
 }
 
 # Print the nanobsd.sh command-line option summary to stderr, exit with code 2
@@ -1900,7 +1807,7 @@ usage() {
 	echo "	-B	suppress installs (both kernel and world)"
 	echo "	-b	suppress builds (both kernel and world)"
 	echo "	-c	specify config file"
-	echo "	-f	suppress code slice extraction (implies -i)"
+	echo "	-f	suppress code partition extraction (implies -i)"
 	echo "	-h	print this help summary page"
 	echo "	-I	build disk image from existing build/install"
 	echo "	-i	suppress disk image build"
@@ -1951,9 +1858,6 @@ set_defaults_and_export() {
 	fi
 	NANO_MAKE_CONF_BUILD=${MAKEOBJDIRPREFIX}/make.conf.build
 	NANO_MAKE_CONF_INSTALL=${NANO_OBJ}/make.conf.install
-
-	# Override user's NANO_DRIVE if they specified a NANO_LABEL
-	[ -n "${NANO_LABEL}" ] && NANO_DRIVE="ufs/${NANO_LABEL}" || true
 
 	# Set a default NANO_TOOLS to NANO_SRC/NANO_TOOLS if it exists.
 	[ ! -d "${NANO_TOOLS}" ] && [ -d "${NANO_SRC}/${NANO_TOOLS}" ] && \
@@ -2022,6 +1926,7 @@ set_defaults_and_export() {
 	export_var NANO_CONFSIZE
 	export_var NANO_CUSTOMIZE
 	export_var NANO_DATASIZE
+	export_var NANO_DISKIMGDIR
 	export_var NANO_DRIVE
 	export_var NANO_EFI_BOOTPART_SIZE
 	export_var NANO_IMAGES
@@ -2045,6 +1950,8 @@ set_defaults_and_export() {
 	export_var NANO_PMAKE
 	export_var NANO_RAM_ETCSIZE
 	export_var NANO_SRC
+	export_var NANO_SWAP_ENCRYPTION
+	export_var NANO_SWAP_SIZE
 	export_var NANO_TIMESTAMP
 	export_var NANO_RAM_TMPVARSIZE
 	export_var NANO_TOOLS
