@@ -200,3 +200,57 @@ EOF
 	fi
 	)
 }
+
+#######################################################################
+# Patch adduser(8)
+
+# Patch adduser script
+cust_adduser() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 0666 usr/sbin/adduser
+	if ! patch -s -V none usr/sbin/adduser <<\EOF
+--- usr/sbin/adduser
++++ usr/sbin/adduser
+@@ -197,6 +197,9 @@ add_user() {
+ 	local _shell= _class= _dotdir= _expire= _pwexpire= _passwd= _upasswd=
+ 	local _passwdmethod= _pwcmd=
+ 
++	${MOUNTCMD} -uw /
++	trap "${MOUNTCMD} -ur /" 1 2 15 EXIT
++
+ 	# Is this a configuration run? If so, don't modify user database.
+ 	#
+ 	if [ -n "$configflag" ]; then
+@@ -322,6 +325,20 @@ add_user() {
+ 			info "Sent welcome message to ($username)."
+ 		fi
+ 	fi
++
++	${MOUNTCMD} -ur /
++	trap - 1 2 15 EXIT
++
++	touch "/etc/ssh/authorized_keys/${username}"
++	chown "${username}:${ulogingroup:-$username}" "/etc/ssh/authorized_keys/${username}"
++	chmod 0600 "/etc/ssh/authorized_keys/${username}"
++
++	${MOUNTCMD} /cfg
++	trap "${UMOUNTCMD} /cfg" 1 2 15 EXIT
++	cp -p /etc/master.passwd /etc/passwd /etc/pwd.db /etc/spwd.db /etc/group /cfg
++	cp -p "/etc/ssh/authorized_keys/${username}" "/cfg/ssh/authorized_keys/${username}"
++	${UMOUNTCMD} /cfg
++	trap - 1 2 15 EXIT
+ }
+ 
+ # get_user
+EOF
+	then
+		err "Patching /usr/sbin/adduser failed!"
+	fi
+	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 0555 usr/sbin/adduser
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_update_file_sha256 usr/sbin/adduser
+	fi
+	)
+}
