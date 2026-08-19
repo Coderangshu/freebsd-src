@@ -28,6 +28,19 @@
 
 set -e
 
+nanobsd_sh=$(realpath $0)
+topdir=$(dirname ${nanobsd_sh})
+. "${topdir}/defaults.sh"
+. "${topdir}/customizations.sh"
+. "${topdir}/_xxx_includes.subr" # XXX ideally, this file should not exist
+
+is_defined() {
+	case $(type $1 2>/dev/null) in
+	*function) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 legacy() {
 	# Pull in legacy stuff on demand
 	. "${topdir}/legacy.sh"
@@ -39,18 +52,6 @@ default() {
 	. "${topdir}/gpt.sh"
 	NANO_PLAN="${NANO_PLAN:-default}"
 }
-
-is_defined() {
-	case $(type $1 2>/dev/null) in
-	*function) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-nanobsd_sh=$(realpath $0)
-topdir=$(dirname ${nanobsd_sh})
-. "${topdir}/_xxx_includes.subr"
-. "${topdir}/defaults.sh"
 
 #######################################################################
 # Parse arguments
