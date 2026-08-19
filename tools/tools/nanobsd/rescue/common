@@ -1,5 +1,7 @@
 #!/bin/sh
 
+legacy
+
 #NANO_SRC=$(pwd)
 #NANO_SRC=${NANO_SRC%/tools/tools/nanobsd/rescue}
 #NANO_OBJ=${NANO_SRC}/../nanobsd-builds/${NANO_NAME}/obj
