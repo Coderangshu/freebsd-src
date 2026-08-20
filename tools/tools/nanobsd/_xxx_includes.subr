@@ -258,3 +258,11 @@ _xxx_tgt_pkg_triggers() {
 		tgt_pkg_chroot triggers
 	fi
 }
+
+#
+# Compact and verify the target pkg database after the manual SQL
+# edits made by _xxx_fix_pkg_permissions.
+#
+_xxx_pkg_db_vacuum() {
+	tgt_pkg shell "VACUUM; PRAGMA integrity_check;"
+}
