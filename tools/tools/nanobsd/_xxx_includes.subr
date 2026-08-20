@@ -96,6 +96,61 @@ metalog_add_data() {
 }
 
 #
+# Build NANO_METALOG from pkgbase package manifests,
+# regenerate system databases (passwd, caps, services),
+# and add missing entries
+#
+_xxx_pkg_metalog() {
+	local files directories path
+
+	# Add the root entry
+	metalog_add_data "."
+
+	_xxx_add_missing_boot_dtb
+
+	# https://github.com/freebsd/pkg/issues/2672
+	metalog_add_data "./etc/local/periodic"
+	metalog_add_data "./etc/local/periodic/daily"
+	metalog_add_data "./etc/local/periodic/security"
+	metalog_add_data "./etc/local/periodic/weekly"
+	# /conf/base counterparts
+	metalog_add_data "./conf/base/etc/local/periodic"
+	metalog_add_data "./conf/base/etc/local/periodic/daily"
+	metalog_add_data "./conf/base/etc/local/periodic/security"
+	metalog_add_data "./conf/base/etc/local/periodic/weekly"
+
+	# Paths missing from the package manifest will default to
+	# root:wheel with 0755 permissions.
+	# Take care not to add them twice to the METALOG; otherwise,
+	# the wrong entry may appear first when sorting
+	tmp_metalog=$(mktemp -t nano_tmp_metalog)
+	trap 'rm -f "$tmp_metalog"' 1 2 15 EXIT
+	directories=$(tgt_pkg query "%Sp")
+	for path in $directories; do
+		path="${path#/}"
+		mtree_walk "$path" "$tmp_metalog"
+	done
+	files=$(tgt_pkg query "%Fp")
+	for file in $files; do
+		file="${file#/}"
+		if [ "$file" != "${file%/*}" ]; then
+			path="${file%/*}"
+			mtree_walk "$path" "$tmp_metalog"
+		else
+			continue
+		fi
+	done
+	cat "$NANO_METALOG" "$tmp_metalog" |
+	    awk '/^#/ { print; next } !seen[$1]++' > "${NANO_METALOG}.pre"
+	mv "${NANO_METALOG}.pre" "$NANO_METALOG"
+	trap - 1 2 15 EXIT
+	rm -f "$tmp_metalog"
+
+	# Remove the directory entries for the symlinked paths
+	sed -i "" "\=^\./usr/local/etc = { / type=dir / d; }" "$NANO_METALOG"
+}
+
+#
 # Manually run triggers and package scripts
 # XXX: Manually run scripts or just triggers?
 # Ideally the package plist should have an @generates keyword that adds
