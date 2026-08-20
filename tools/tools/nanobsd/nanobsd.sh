@@ -205,7 +205,7 @@ else
 fi
 
 if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-	nano_configure_pkgbase_pkg
+	nano_fetch_pkgbase_packages
 	if ! $do_root; then
 		nano_pkgbase_reset_metalog
 	fi
