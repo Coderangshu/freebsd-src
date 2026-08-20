@@ -1,0 +1,11 @@
+#######################################################################
+#
+# XXX Include Functions
+#
+# Temporary workarounds for known upstream bugs and distribution issues.
+# Each function tracks an upstream issue and should be reverted once
+# fixed upstream or in base.
+#
+# "Nothing is more permanent than a temporary solution"
+#
+#######################################################################
