@@ -493,6 +493,78 @@ tgt_pkg_update_file_sha256() {
 	fi
 }
 
+#
+# Update the content value in the config_files table of the target pkg database.
+# All paths are relative to NANO_WORLDDIR
+#
+tgt_pkg_update_config_files_content() {
+	local escaped_file file
+
+	file="${NANO_WORLDDIR}/${1}"
+	# We need to escape single quotes and avoid $(...) from removing newlines at EOF
+	escaped_file=$(sed "s/'/''/g" "$file"; printf 'EOF')
+	escaped_file=${escaped_file%EOF}
+
+	if [ -f "$file" ]; then
+		tgt_pkg shell "UPDATE config_files SET content = '$escaped_file' WHERE path = '/${1}';"
+	else
+		err "File ${file} not found"
+	fi
+}
+
+#
+# Update the path the files table of the target pkg database from
+# /usr/local/etc to /etc/local.  All paths are relative to NANO_WORLDDIR
+#
+tgt_pkg_update_file_path_etc_local() {
+	tgt_pkg shell <<-EOF
+		UPDATE files
+		SET path = '/etc/local' || SUBSTR(path, 15)
+		WHERE path LIKE '/usr/local/etc%';
+	EOF
+}
+
+#
+# Swap the /tmp ID with the /var/tmp ID in the pkg_directories table.
+# Remove the /tmp directory from the directories table.
+#
+tgt_pkg_link_tmp_var_tmp() {
+	local tmp_id var_tmp_id
+
+	tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/tmp';")
+	var_tmp_id=$(tgt_pkg shell "SELECT id FROM directories WHERE path = '/var/tmp';")
+
+	if [ -z "$tmp_id" ] || [ -z "$var_tmp_id" ]; then
+		return
+	fi
+
+	tgt_pkg shell <<-EOF
+		BEGIN TRANSACTION;
+
+		-- Change any package relation from the /tmp ID to the /var/tmp ID
+		UPDATE OR IGNORE pkg_directories
+		SET directory_id = ${var_tmp_id} WHERE directory_id = ${tmp_id};
+
+		-- Remove residual /tmp remnants left behind by "OR IGNORE"
+		DELETE FROM pkg_directories WHERE directory_id = ${tmp_id};
+
+		-- Remove /tmp from the directories table
+		DELETE FROM directories WHERE id = ${tmp_id};
+
+		COMMIT;
+	EOF
+}
+
+# Timestamp all files with NANO_TIMESTAMP in the pkg database
+tgt_pkg_time_timestamp() {
+	if [ -z "$NANO_TIMESTAMP" ]; then
+		return
+	fi
+
+	tgt_pkg shell "UPDATE files SET mtime = ${NANO_TIMESTAMP};"
+	tgt_pkg shell "UPDATE packages SET time = ${NANO_TIMESTAMP};"
+}
+
 # Run pkg(8) with the configured ABI, repo, and cache settings
 pkg_cmd() {
 	pkg --repo-conf-dir "$(nano_pkg_repos_dir)" \
@@ -1111,6 +1183,10 @@ fixup_before_diskimage() {
 		cat ${NANO_METALOG}.pre | ${NANO_TOOLS}/mtree-dedup.awk | \
 		    sort -u | mtree -C -K uname,gname,tags -R size,time >> ${NANO_METALOG}
 	fi
+
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_time_timestamp
+	fi
 }
 
 #
@@ -1181,6 +1257,9 @@ setup_nanobsd() {
 
 	# Put /tmp on the /var ramdisk (could be symlink already)
 	tgt_dir2symlink tmp var/tmp 1777
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_link_tmp_var_tmp
+	fi
 
 	) > ${NANO_LOG}/_.dl 2>&1
 }
@@ -1237,6 +1316,10 @@ EOF
 		err "Regular expression pattern not found"
 	fi
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 444 etc/defaults/rc.conf
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_update_file_sha256 etc/defaults/rc.conf
+		tgt_pkg_update_config_files_content etc/defaults/rc.conf
+	fi
 
 	# Save config file for scripts
 	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
@@ -1509,6 +1592,12 @@ cust_comconsole() {
 
 	# Tell loader to use serial console
 	echo "${NANO_BOOT2CFG}" > ${NANO_WORLDDIR}/boot.config
+	tgt_touch boot.config
+
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_update_file_sha256 etc/ttys
+		tgt_pkg_update_config_files_content etc/ttys
+	fi
 }
 
 #######################################################################
@@ -1518,6 +1607,11 @@ cust_comconsole() {
 cust_allow_ssh_root() {
 	sed -i "" -e 's/^#PermitRootLogin no/PermitRootLogin yes/' \
 	    ${NANO_WORLDDIR}/etc/ssh/sshd_config
+
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_update_file_sha256 etc/ssh/sshd_config
+		tgt_pkg_update_config_files_content etc/ssh/sshd_config
+	fi
 }
 
 #######################################################################
