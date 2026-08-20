@@ -1015,7 +1015,6 @@ install_world() {
 	set -o xtrace
 	cd "${NANO_SRC}"
 	${NANO_MAKE} installworld DESTDIR="${NANO_WORLDDIR}" DB_FROM_SRC=yes
-	chflags -R noschg "${NANO_WORLDDIR}"
 	) > ${NANO_LOG}/_.iw 2>&1
 }
 
