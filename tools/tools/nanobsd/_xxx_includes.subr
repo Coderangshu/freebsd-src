@@ -45,6 +45,18 @@ _xxx_libarchive_mtree_bug() {
 # freebsd-base(7) (pkgbase) variables and functions
 #
 
+# mtree: ./boot/dtb/arm: missing directory in specification
+#       These directories are missing from BSD.root.dist, however
+#       I do not want to add them to the mtree.  These must exist
+#       only for arm/arm64
+_xxx_add_missing_boot_dtb() {
+	tgt_dir boot/dtb/arm
+	tgt_dir boot/dtb/freescale
+	tgt_dir boot/dtb/marvell
+	tgt_dir boot/dtb/nvidia
+	tgt_dir boot/dtb/qcom
+}
+
 #
 # Add an entry to the metalog
 # $1=file/direcrory, $2=mode (optional), $3=metalog file (optional)
