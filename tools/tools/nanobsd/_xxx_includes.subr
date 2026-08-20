@@ -33,3 +33,10 @@ _xxx_remove_extra_dist_files() {
 		tgt_rm usr/share/man/man7/tests.7.gz
 	fi
 }
+
+# Already fixed upstream
+# https://github.com/libarchive/libarchive/pull/3008
+# Account for a bug in libarchive, where the first entry is "/."
+_xxx_libarchive_mtree_bug() {
+	sed -i "" -e 's|^/\. |\. |' "$NANO_METALOG"
+}
