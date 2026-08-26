@@ -61,6 +61,9 @@ NANO_BOOTLOADER="boot/gptboot"
 
 NANO_ALIGN="${NANO_ALIGN:-1MiB}"
 
+# makefs parameters to use
+NANO_MAKEFS="-o softupdates=1,version=2"
+
 # Create the /etc/fstab file
 tgt_write_fstab() {
 	(
@@ -401,7 +404,7 @@ create_code_partition() {
 	code_size=$(( code_sects * NANO_SECTOR_SIZE ))
 
 	echo "Writing code image..."
-	nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
+	nano_makefs "ffs" "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 	    "$NANO_METALOG" "$code_size" "$IMG" "$NANO_WORLDDIR"
 	) > "${NANO_OBJ}/_.cp" 2>&1
 }
@@ -478,7 +481,7 @@ create_diskimage() {
 		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
 			echo "Duplicating to second image..."
 			tgt_switch_root_fstab 1 2
-			nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
+			nano_makefs "ffs" "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 			    "${NANO_METALOG}" "$code_size" \
 			    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" "${NANO_WORLDDIR}"
 			tgt_switch_root_fstab 2 1
@@ -566,4 +569,69 @@ EOF
 		tgt_pkg_update_config_files_content etc/rc.d/gptboot
 	fi
 	)
+}
+
+#
+# Create a UFS filesystem image from a directory
+# Input: $1 = type (cfg/data), $2 = output image path, $3 = source dir,
+# $4 = label, $5 = size in bytes, $6 = metalog
+#
+populate_part() {
+	local dir fs lbl metalog size type
+	type=$1
+	fs=$2
+	dir=$3
+	lbl=$4
+	size=$5
+	metalog=$6
+
+	echo "Creating ${fs}"
+
+	# Use the directory provided, otherwise create an empty one temporarily.
+	if [ -n "${dir}" ] && [ -d "${dir}" ]; then
+		echo "Populating ${lbl} from ${dir}"
+	else
+		if [ "${type}" = "cfg" ]; then
+			dir=$(mktemp -d -p "${NANO_OBJ}" -t "${type}")
+			trap "rm -rf ${dir}" 1 2 15 EXIT
+		fi
+	fi
+
+	if [ -d "${dir}" ]; then
+		# If there is no metalog, create one using the default
+		# NANO_DEF_UNAME and NANO_DEF_GNAME for all entries in the spec.
+		if [ -z "${metalog}" ]; then
+			metalog="${NANO_METALOG}.${type}"
+			echo "/set type=dir uname=${NANO_DEF_UNAME}" \
+			    "gname=${NANO_DEF_GNAME} mode=0755" > "${metalog}"
+			echo ". type=dir uname=${NANO_DEF_UNAME}" \
+			    "gname=${NANO_DEF_GNAME} mode=0755" >> "${metalog}"
+			(
+				cd "${dir}"
+				mtree -bc -k flags,gid,gname,link,mode,uid,uname |
+				    mtree -C | tail -n +2 |
+				    sed "s/uid=[[:digit:]]*/uname=${NANO_DEF_UNAME}/g" |
+				    sed "s/gid=[[:digit:]]*/gname=${NANO_DEF_GNAME}/g" >> "${metalog}"
+			)
+		fi
+
+		nano_makefs "ffs" "$NANO_MAKEFS" "$metalog" "$size" "$fs" "$dir"
+	fi
+}
+
+#
+# Thin wrapper around populate_part for creating
+# the configuration partition image file
+# Input: $1 = image path, $2 = source dir, $3 = label, $4 = size, $5 = metalog
+#
+populate_cfg_part() {
+	populate_part "cfg" "$1" "$2" "$3" "$4" "$5"
+}
+
+#
+# Thin wrapper around populate_part for creating the data partition image file
+# Input: $1 = image path, $2 = source dir, $3 = label, $4 = size, $5 = metalog
+#
+populate_data_part() {
+	populate_part "data" "$1" "$2" "$3" "$4" "$5"
 }
