@@ -244,6 +244,7 @@ populate_data_slice() {
 # Note: we use the is_defined hack to catch most uses of function redefinition
 # in config files.  Older versions of FreeBSD defined these before configs were
 # included, but now we define it after to allow different NANO_PLAN...
+
 #
 # Calculate MBR partition layout (start offset, size, index)
 # from media/image/code/conf/data sizes
