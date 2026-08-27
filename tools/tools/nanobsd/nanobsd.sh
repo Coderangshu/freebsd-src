@@ -45,13 +45,14 @@ do_code=true
 do_installworld=true
 do_image=true
 do_native_xtools=false
+do_precompiled=false
 do_prep_image=true
 
 # Pull in legacy stuff for now automatically
 . "${topdir}/legacy.sh"
 
 set +e
-args=$(getopt BKXWbc:fhiIknpqUvw $*)
+args=$(getopt BKXWbc:fhiIknPpqUvw $*)
 if [ $? -ne 0 ]; then
 	usage
 	exit 2
@@ -121,6 +122,13 @@ do
 		;;
 	-n)
 		do_clean=false
+		shift
+		;;
+	-P)
+		do_world=false
+		do_kernel=false
+		do_precompiled=true
+		NANO_TIMESTAMP=
 		shift
 		;;
 	-p)
@@ -196,13 +204,21 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
-if $do_installworld ; then
-    clean_world
-    make_conf_install
-    install_world
-    install_etc
+if $do_precompiled; then
+	nano_fetch_distsets
+fi
+
+if $do_installworld; then
+	clean_world
+	if $do_precompiled; then
+		install_precompiled_world
+	else
+		make_conf_install
+		install_world
+		install_etc
+	fi
 else
-    pprint 2 "Skipping installworld (as instructed)"
+	pprint 2 "Skipping installworld (as instructed)"
 fi
 
 if ${do_native_xtools}; then
@@ -212,9 +228,17 @@ if ${do_prep_image}; then
 	setup_nanobsd_etc
 fi
 if $do_installkernel; then
-	install_kernel
+	if $do_precompiled; then
+		install_precompiled_kernel
+	else
+		install_kernel
+	fi
 else
 	pprint 2 "Skipping installkernel (as instructed)"
+fi
+
+if $do_precompiled && ($do_installworld || $do_installkernel); then
+	patch_precompiled
 fi
 
 if $do_prep_image; then
