@@ -184,10 +184,9 @@ NANO_DEF_GNAME=wheel
 # conflates the two, so architectures where TARGET != TARGET_ARCH and
 # TARGET can't be guessed from TARGET_ARCH do not work.  This defaults
 # to the arch of the current machine.
-NANO_ARCH=`uname -p`
+NANO_ARCH=$(uname -p)
 
-# CPUTYPE defaults to "" which is the default when CPUTYPE isn't
-# defined.
+# CPUTYPE defaults to "" which is the default when CPUTYPE isn't defined
 NANO_CPUTYPE=""
 
 # Directory to populate /cfg from
@@ -238,7 +237,7 @@ nano_make_install_env() {
 
 # Extra environment variables for kernel builds
 nano_make_kernel_env() {
-	if [ -f "${NANO_KERNEL}" ] ; then
+	if [ -f "${NANO_KERNEL}" ]; then
 		KERNCONFDIR="$(realpath $(dirname ${NANO_KERNEL}))"
 		KERNCONF="$(basename ${NANO_KERNEL})"
 		make_export KERNCONFDIR
@@ -256,17 +255,16 @@ nano_global_make_env() {
 }
 
 #
-# Create empty files in the target tree, and record the fact.  All paths
-# are relative to NANO_WORLDDIR.
+# Create empty files in the target tree, and record the fact.
+# All paths are relative to NANO_WORLDDIR
 #
 tgt_touch() (
 	cd "${NANO_WORLDDIR}"
 	for i; do
 		touch $i
 		if [ -n "$NANO_METALOG" ]; then
-			echo "./${i} type=file" \
-			    "uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" \
-			    "mode=0644" >> "${NANO_METALOG}"
+			printf "./%s type=file uname=%s gname=%s mode=0644\n" \
+			    "$i" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$NANO_METALOG"
 		fi
 	done
 )
@@ -286,15 +284,15 @@ tgt_dir2symlink() (
 	rm -xrf "$dir"
 	ln -sf "$symlink" "$dir"
 	if [ -n "$NANO_METALOG" ]; then
-		echo "./${dir} type=link" \
-		    "uname=${NANO_DEF_UNAME} gname=${NANO_DEF_GNAME}" \
-		    "mode=${mode} link=${symlink}" >> ${NANO_METALOG}
+		printf "./%s type=link uname=%s gname=%s mode=%s link=%s\n" \
+		    "$dir" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" \
+		    "$symlink" >> "$NANO_METALOG"
 	fi
 )
 
 #
-# Create directories in the target tree, and record the fact.  All paths
-# are relative to NANO_WORLDDIR.
+# Create directories in the target tree, and record the fact.
+# All paths are relative to NANO_WORLDDIR
 #
 tgt_dir() {
 	for i; do
@@ -313,7 +311,7 @@ tgt_dir() {
 
 #
 # Switch the current root partition in the target file system tab.
-# Takes two arguments: the current, and the new partition.
+# Input: $1 = current root partition, $2 = new root partition
 #
 tgt_switch_root_fstab()
 {
@@ -321,26 +319,26 @@ tgt_switch_root_fstab()
 	current="$1"
 	new="$2"
 
-	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab
-	do
+	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
 		sed -i "" "s=${NANO_DRIVE}${current}=${NANO_DRIVE}${new}=g" "${f}"
 	done
 }
 
-# run in the world chroot, errors fatal
+# Run in the world chroot, errors fatal
 CR() {
 	chroot "${NANO_WORLDDIR}" /bin/sh -exc "$*"
 }
 
-# run in the world chroot, errors not fatal
+# Run in the world chroot, errors not fatal
 CR0() {
 	chroot "${NANO_WORLDDIR}" /bin/sh -c "$*" || true
 }
 
+# Clean and create object directory (MAKEOBJDIRPREFIX)
 clean_build() {
 	pprint 2 "Clean and create object directory (${MAKEOBJDIRPREFIX})"
 
-	if ! rm -xrf ${MAKEOBJDIRPREFIX}/ > /dev/null 2>&1 ; then
+	if ! rm -xrf ${MAKEOBJDIRPREFIX}/ > /dev/null 2>&1; then
 		chflags -R noschg ${MAKEOBJDIRPREFIX}/
 		rm -xr ${MAKEOBJDIRPREFIX}/
 	fi
@@ -398,7 +396,7 @@ build_kernel() {
 clean_world() {
 	if [ "${NANO_OBJ}" != "${MAKEOBJDIRPREFIX}" ]; then
 		pprint 2 "Clean and create object directory (${NANO_OBJ})"
-		if ! rm -xrf ${NANO_OBJ}/ > /dev/null 2>&1 ; then
+		if ! rm -xrf ${NANO_OBJ}/ > /dev/null 2>&1; then
 			chflags -R noschg ${NANO_OBJ}
 			rm -xr ${NANO_OBJ}/
 		fi
@@ -406,7 +404,7 @@ clean_world() {
 		printenv > ${NANO_LOG}/_.env
 	else
 		pprint 2 "Clean and create world directory (${NANO_WORLDDIR})"
-		if ! rm -xrf "${NANO_WORLDDIR}/" > /dev/null 2>&1 ; then
+		if ! rm -xrf "${NANO_WORLDDIR}/" > /dev/null 2>&1; then
 			chflags -R noschg "${NANO_WORLDDIR}"
 			rm -xrf "${NANO_WORLDDIR}/"
 		fi
@@ -495,16 +493,15 @@ native_xtools() {
 }
 
 #
-# Run the requested set of early customization scripts, run before
-# buildworld.
+# Run the requested set of early customization scripts,
+# run before buildworld
 #
 run_early_customize() {
 	pprint 2 "run early customize scripts"
-	for c in $NANO_EARLY_CUSTOMIZE
-	do
+	for c in $NANO_EARLY_CUSTOMIZE; do
 		pprint 2 "early customize \"$c\""
 		pprint 3 "log: ${NANO_LOG}/_.early_cust.$c"
-		pprint 4 "`type $c`"
+		pprint 4 "$(type $c)"
 		{ t=$(set -o | awk '$1 == "xtrace" && $2 == "off" { print "set +o xtrace"}');
 		  set -o xtrace ;
 		  $c ;
@@ -521,11 +518,10 @@ run_early_customize() {
 run_customize() {
 
 	pprint 2 "run customize scripts"
-	for c in $NANO_CUSTOMIZE
-	do
+	for c in $NANO_CUSTOMIZE; do
 		pprint 2 "customize \"$c\""
 		pprint 3 "log: ${NANO_LOG}/_.cust.$c"
-		pprint 4 "`type $c`"
+		pprint 4 "$(type $c)"
 		( set -o xtrace ; $c ) > ${NANO_LOG}/_.cust.$c 2>&1
 	done
 }
@@ -536,11 +532,10 @@ run_customize() {
 #
 run_late_customize() {
 	pprint 2 "run late customize scripts"
-	for c in $NANO_LATE_CUSTOMIZE
-	do
+	for c in $NANO_LATE_CUSTOMIZE; do
 		pprint 2 "late customize \"$c\""
 		pprint 3 "log: ${NANO_LOG}/_.late_cust.$c"
-		pprint 4 "`type $c`"
+		pprint 4 "$(type $c)"
 		( set -o xtrace ; $c ) > ${NANO_LOG}/_.late_cust.$c 2>&1
 	done
 }
@@ -580,7 +575,7 @@ setup_nanobsd() {
 	# Move /usr/local/etc to /etc/local so that the /cfg stuff
 	# can stomp on it.  Otherwise packages like ipsec-tools which
 	# have hardcoded paths under ${prefix}/etc are not tweakable.
-	if [ -d usr/local/etc ] ; then
+	if [ -d usr/local/etc ]; then
 		(
 		cd usr/local/etc
 		find . -print | cpio ${CPIO_SYMLINK} -dumpl ../../../etc/local
@@ -596,9 +591,8 @@ setup_nanobsd() {
 	# to have the symlink in error though.
 	tgt_dir2symlink usr/local/etc ../../etc/local 0755
 
-	for d in var etc
-	do
-		# link /$d under /conf
+	for d in var etc; do
+		# Link /$d under /conf
 		# we use hard links so we have them both places.
 		# the files in /$d will be hidden by the mount.
 		tgt_dir conf/base/$d conf/default/$d
@@ -606,7 +600,7 @@ setup_nanobsd() {
 		if [ -n "$NANO_METALOG" ]; then
 			grep "^.\/${d}\/" "${NANO_METALOG}" |
 			    sed -e "s=^./${d}=./conf/base/${d}=g" |
-			    sort | uniq >> "${NANO_METALOG}.conf"
+			    sort -u >> "${NANO_METALOG}.conf"
 		fi
 	done
 
@@ -620,7 +614,7 @@ setup_nanobsd() {
 	tgt_touch conf/base/etc/md_size
 	tgt_touch conf/base/var/md_size
 
-	# pick up config files from the special partition
+	# Pick up config files from the special partition
 	echo "mount -o ro /dev/${NANO_DRIVE}${NANO_SLICE_CFG}" > conf/default/etc/remount
 	tgt_touch conf/default/etc/remount
 
@@ -677,7 +671,7 @@ EOF
 	fi
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 444 etc/defaults/rc.conf
 
-	# save config file for scripts
+	# Save config file for scripts
 	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
 	tgt_touch etc/nanobsd.conf
 
@@ -722,8 +716,10 @@ nano_makefs() {
 	    -R "${size}b" -T "${NANO_TIMESTAMP}" "${image}" "${dir}"
 }
 
+#
 # Convenient spot to work around any umount issues that your build environment
-# hits by overriding this method.
+# hits by overriding this method
+#
 nano_umount() {
 	umount ${1}
 }
@@ -739,12 +735,18 @@ populate_slice() {
 	if [ -n "${dir}" -a -d "${dir}" ]; then
 		echo "Populating ${lbl} from ${dir}"
 		cd "${dir}"
-		find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' | cpio ${CPIO_SYMLINK} -dumpv ${mnt}
+		find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
+		    cpio ${CPIO_SYMLINK} -dumpv ${mnt}
 	fi
 	df -i ${mnt}
 	nano_umount ${mnt}
 }
 
+#
+# Create a UFS filesystem image from a directory
+# Input: $1 = type (cfg/data), $2 = output image path, $3 = source dir,
+# $4 = label, $5 = size in bytes, $6 = metalog
+#
 _populate_part() {
 	local dir fs lbl metalog size type
 	type=$1
@@ -823,7 +825,7 @@ last_orders() {
 #
 
 FlashDevice() {
-	if [ -d ${NANO_TOOLS} ] ; then
+	if [ -d ${NANO_TOOLS} ]; then
 		. ${NANO_TOOLS}/FlashDevice.sub
 	else
 		. ${NANO_SRC}/${NANO_TOOLS}/FlashDevice.sub
@@ -852,7 +854,7 @@ FlashDevice() {
 #
 
 UsbDevice() {
-	local a1=`echo $1 | tr '[:upper:]' '[:lower:]'`
+	local a1=$(echo $1 | tr '[:upper:]' '[:lower:]')
 	case $a1 in
 	generic-fdd)
 		NANO_HEADS=64
@@ -874,32 +876,35 @@ UsbDevice() {
 #######################################################################
 # Setup serial console
 
+# Enable serial console in /etc/ttys and write NANO_BOOT2CFG to /boot.config
 cust_comconsole() {
 	# Enable getty on console
 	sed -i "" -e '/^tty[du]0/s/off/onifconsole/' ${NANO_WORLDDIR}/etc/ttys
 
-	# Disable getty on syscons or vt devices
-	sed -i "" -E '/^ttyv[0-8]/s/\ton(ifexists)?/\toff/' ${NANO_WORLDDIR}/etc/ttys
+	# Disable getty on syscons internal console
+	sed -i "" -e '/^ttyv0/s/on/off/' ${NANO_WORLDDIR}/etc/ttys
 
-	# Tell loader to use serial console early.
+	# Tell loader to use serial console
 	echo "${NANO_BOOT2CFG}" > ${NANO_WORLDDIR}/boot.config
-	tgt_touch boot.config
 }
 
 #######################################################################
 # Allow root login via ssh
 
+# Enable root login via SSH by setting PermitRootLogin yes in sshd_config
 cust_allow_ssh_root() {
-	sed -i "" -E 's/^#?PermitRootLogin.*/PermitRootLogin yes/' \
+	sed -i "" -e 's/^#PermitRootLogin no/PermitRootLogin yes/' \
 	    ${NANO_WORLDDIR}/etc/ssh/sshd_config
 }
 
 #######################################################################
 # Install the stuff under ./Files
 
+# Copy all files from NANO_TOOLS/Files into NANO_WORLDDIR
 cust_install_files() (
 	cd "${NANO_TOOLS}/Files"
-	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' | cpio ${CPIO_SYMLINK} -Ldumpv ${NANO_WORLDDIR}
+	find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
+	    cpio ${CPIO_SYMLINK} -Ldumpv ${NANO_WORLDDIR}
 
 	if [ -n "${NANO_CUST_FILES_MTREE}" -a -f ${NANO_CUST_FILES_MTREE} ]; then
 		CR "mtree -eiU -p /" <${NANO_CUST_FILES_MTREE}
@@ -932,8 +937,8 @@ cust_pkgng() {
 	fi
 
 	# Find a pkg-* package
-	for x in `find -s ${NANO_PACKAGE_DIR} -iname 'pkg-*'`; do
-		_NANO_PKG_PACKAGE=`basename "$x"`
+	for x in $(find -s ${NANO_PACKAGE_DIR} -iname 'pkg-*'); do
+		_NANO_PKG_PACKAGE=$(basename "$x")
 	done
 	if [ -z "${_NANO_PKG_PACKAGE}" -o ! -f "${NANO_PACKAGE_DIR}/${_NANO_PKG_PACKAGE}" ]; then
 		echo "FAILED: need a pkg/ package for bootstrapping"
@@ -953,10 +958,10 @@ cust_pkgng() {
 	(
 		# Expand any glob characters in package list
 		cd "${NANO_PACKAGE_DIR}"
-		_PKGS=`find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort | uniq`
+		_PKGS=$(find ${NANO_PACKAGE_LIST} -not -name "${_NANO_PKG_PACKAGE}" -print | sort -u)
 
 		# Show todo
-		todo=`echo "$_PKGS" | wc -l`
+		todo=$(echo "$_PKGS" | wc -l)
 		echo "=== TODO: $todo"
 		echo "$_PKGS"
 		echo "==="
@@ -1007,12 +1012,15 @@ late_customize_cmd() {
 #
 #######################################################################
 
+#
 # Progress Print
-#	Print $2 at level $1.
+# Input: $1 = level, $2 = message
+#
 pprint() {
     if [ "$1" -le $PPLEVEL ]; then
-	runtime=$(( `date +%s` - $NANO_STARTTIME ))
-	printf "%s %.${1}s %s\n" "`date -u -r $runtime +%H:%M:%S`" "#####" "$2" 1>&3
+		runtime=$(( $(date +%s) - NANO_STARTTIME ))
+		printf "%s %.${1}s %s\n" \
+		    "$(date -u -r $runtime +%H:%M:%S)" "#####" "$2" 1>&3
     fi
 }
 
@@ -1080,7 +1088,7 @@ set_defaults_and_export() {
 		NANO_METALOG=${NANO_OBJ}/_.metalog
 	fi
 
-	NANO_STARTTIME=`date +%s`
+	NANO_STARTTIME=$(date +%s)
 	: ${NANO_TIMESTAMP:=${NANO_STARTTIME}}
 	pprint 3 "Exporting NanoBSD variables"
 	export_var MAKEOBJDIRPREFIX
