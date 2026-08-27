@@ -40,6 +40,30 @@ local function default_user(obj, metadata)
 	}
 end
 
+local function is_root_readonly()
+	local f = io.popen("mount | grep -E '^[^ ]+ on / \\([^)]*\\bro\\b'")
+	local result = f:read("*l")
+	f:close()
+	return result ~= nil
+end
+
+local function remount_root_rw()
+	local was_readonly = is_root_readonly()
+	if was_readonly then
+		local ret = os.execute("mount -uw /")
+		if not ret then
+			nuage.err("Failed to remount root filesystem read-write")
+		end
+	end
+	return was_readonly
+end
+
+local function remount_root_ro(was_readonly)
+	if was_readonly then
+		os.execute("mount -ur /")
+	end
+end
+
 local root = os.getenv("NUAGE_FAKE_ROOTDIR")
 if not root then
 	root = ""
@@ -1172,6 +1196,7 @@ end
 
 local metadata = load_metadata(citype)
 local line, obj = load_userdata()
+local root_was_readonly = remount_root_rw()
 
 -- No user-data
 if line == nil then
@@ -1235,3 +1260,5 @@ elseif line:sub(1, 2) == "#!" then
 	-- delay for execution at rc.local time --
 	nuage.chmod(root .. "/var/cache/nuageinit/user_data", "0755")
 end
+
+remount_root_ro(root_was_readonly)
