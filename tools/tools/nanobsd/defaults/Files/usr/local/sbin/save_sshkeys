@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# Copyright (c) 2004-2005 Poul-Henning Kamp.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+
+set -e
+
+mount /cfg
+trap "umount /cfg" 1 2 15 EXIT
+
+mkdir -p /cfg/ssh
+(
+cd /etc/ssh
+for keyfile in ./ssh_host_*; do
+	if [ -f "$keyfile" ]; then
+		cp -p "$keyfile" /cfg/ssh/
+	fi
+done
+)
+
+umount /cfg
+trap - 1 2 15 EXIT

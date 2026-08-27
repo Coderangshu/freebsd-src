@@ -69,7 +69,176 @@ NANO_RAM_TMPVARSIZE=81920
 #
 METADATA_SECTS=16
 
+# Backing type of md(4) device
+# Can be "file" or "swap"
+NANO_MD_BACKING="file"
+
+# for swap type md(4) backing, write out the mbr only
+NANO_IMAGE_MBRONLY=true
+
+# Newfs parameters to use
+NANO_NEWFS="-b 4096 -f 512 -i 8192 -U"
+
+# makefs parameters to use
+NANO_MAKEFS="-o bsize=4096,density=8192,fsize=512,softupdates=1,version=2"
+
+# Set NANO_LABEL to non-blank to form the basis for using /dev/ufs/label
+# in preference to /dev/${NANO_DRIVE}
+# Root partition will be ${NANO_LABEL}s{1,2}
+# /cfg partition will be ${NANO_LABEL}s3
+# /data partition will be ${NANO_LABEL}s4
+NANO_LABEL=""
+NANO_SLICE_ROOT=s1
+NANO_SLICE_ALTROOT=s2
+NANO_SLICE_CFG=s3
+NANO_SLICE_DATA=s4
+NANO_PARTITION_ROOT=a
+NANO_PARTITION_ALTROOT=a
+NANO_ROOT=s1a
+NANO_ALTROOT=s2a
+
+# Override user's NANO_DRIVE if they specified a NANO_LABEL
+[ -n "${NANO_LABEL}" ] && NANO_DRIVE="ufs/${NANO_LABEL}" || true
+
+# boot0 flags/options and configuration
+NANO_BOOT0CFG="-o packet -s 1 -m 3"
+NANO_BOOTLOADER="boot/boot0sio"
+
+# Path to the files directory used by cust_install_files()
+NANO_CUST_FILESDIR="${NANO_TOOLS}/Files"
+
+#
+# Path to mtree file to apply to anything copied by cust_install_files().
+# If you specify this, the mtree file *must* have an entry for every file and
+# directory located in Files
+#
+NANO_CUST_FILES_MTREE=""
+
+
+
 #######################################################################
+# Functions and variable definitions used by the legacy nanobsd
+# image building system.
+
+#######################################################################
+# Common Flash device geometries
+#
+
+#
+# Source FlashDevice.sub and call sub_FlashDevice to set NANO_MEDIASIZE
+# and geometry vars for a named flash device
+# Input: $1 = flash device name, $2 = size variant
+#
+FlashDevice() {
+	if [ -d ${NANO_TOOLS} ]; then
+		. ${NANO_TOOLS}/FlashDevice.sub
+	else
+		. ${NANO_SRC}/${NANO_TOOLS}/FlashDevice.sub
+	fi
+	sub_FlashDevice $1 $2
+}
+
+#######################################################################
+# USB device geometries
+#
+# Usage:
+#	UsbDevice Generic 1000	# a generic flash key sold as having 1GB
+#
+# This function will set NANO_MEDIASIZE, NANO_HEADS and NANO_SECTS for you.
+#
+# Note that the capacity of a flash key is usually advertised in MB or
+# GB, *not* MiB/GiB. As such, the precise number of cylinders available
+# for C/H/S geometry may vary depending on the actual flash geometry.
+#
+# The following generic device layouts are understood:
+#  generic           An alias for generic-hdd.
+#  generic-hdd       255H 63S/T xxxxC with no MBR restrictions.
+#  generic-fdd       64H 32S/T xxxxC with no MBR restrictions.
+#
+# The generic-hdd device is preferred for flash devices larger than 1GB
+#
+
+#
+# Set NANO_HEADS, NANO_SECTS, and NANO_MEDIASIZE for a USB device based
+# on type (generic-fdd/generic-hdd) and advertised MB capacity
+# Input: $1 = device type string, $2 = size in MB
+#
+UsbDevice() {
+	local a1=$(echo $1 | tr '[:upper:]' '[:lower:]')
+	case $a1 in
+	generic-fdd)
+		NANO_HEADS=64
+		NANO_SECTS=32
+		NANO_MEDIASIZE=$(( $2 * 1000 * 1000 / 512 ))
+		;;
+	generic|generic-hdd)
+		NANO_HEADS=255
+		NANO_SECTS=63
+		NANO_MEDIASIZE=$(( $2 * 1000 * 1000 / 512 ))
+		;;
+	*)
+		err "Unknown USB flash device"
+		;;
+	esac
+}
+
+#
+# Create a new UFS filesystem on a block device with an optional label,
+# and mount it async
+# Input: $1 = device, $2 = mount point, $3 = label suffix
+#
+newfs_part() {
+	local dev mnt lbl
+	dev=$1
+	mnt=$2
+	lbl=$3
+	echo newfs ${NANO_NEWFS} ${NANO_LABEL:+-L${NANO_LABEL}${lbl}} ${dev}
+	newfs ${NANO_NEWFS} ${NANO_LABEL:+-L${NANO_LABEL}${lbl}} ${dev}
+	mount -o async ${dev} ${mnt}
+}
+
+#
+# Populate a slice from a source directory on a given device
+# Input: $1 = device, $2 = source dir (optional), $3 = mount point,
+# $4 = label suffix
+#
+populate_slice() {
+	local dev dir mnt lbl
+	dev=$1
+	dir=$2
+	mnt=$3
+	lbl=$4
+	echo "Creating ${dev} (mounting on ${mnt})"
+	newfs_part ${dev} ${mnt} ${lbl}
+	if [ -n "${dir}" -a -d "${dir}" ]; then
+		echo "Populating ${lbl} from ${dir}"
+		cd "${dir}"
+		find . -print | grep -Ev '/(CVS|\.svn|\.hg|\.git)/' |
+		    cpio ${CPIO_SYMLINK} -dumpv ${mnt}
+	fi
+	df -i ${mnt}
+	nano_umount ${mnt}
+}
+
+#
+# Thin wrapper around populate_slice for the configuration slice
+# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
+#
+populate_cfg_slice() {
+	populate_slice "$1" "$2" "$3" "$4"
+}
+
+#
+# Thin wrapper around populate_slice for the data slice
+# Input: $1 = device, $2 = source dir, $3 = mount point, $4 = label
+#
+populate_data_slice() {
+	populate_slice "$1" "$2" "$3" "$4"
+}
+
+# Note: we use the is_defined hack to catch most uses of function redefinition
+# in config files.  Older versions of FreeBSD defined these before configs were
+# included, but now we define it after to allow different NANO_PLAN...
 #
 # Calculate MBR partition layout (start offset, size, index)
 # from media/image/code/conf/data sizes
@@ -149,6 +318,8 @@ create_code_slice() {
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
 
 	(
+	local CODE_SIZE IMG MNT
+
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}
 	MNT=${NANO_OBJ}/_.mnt
 	mkdir -p ${MNT}
@@ -205,6 +376,8 @@ _create_code_slice() {
 	pprint 3 "log: ${NANO_OBJ}/_.cs"
 
 	(
+	local CODE_SIZE IMG
+
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMG1NAME}
 	CODE_SIZE=$(awk '$3 == 1 {print $2}' "${NANO_LOG}/_.partitioning")
 
@@ -215,7 +388,7 @@ _create_code_slice() {
 	else
 		echo "Partition will not be bootable"
 	fi
-	nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
+	nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 	    "${NANO_METALOG}" \
 	    "$(( (CODE_SIZE - METADATA_SECTS) * NANO_SECTOR_SIZE ))" \
 	    "${NANO_OBJ}/_.disk.part" "${NANO_WORLDDIR}"
@@ -304,8 +477,7 @@ create_diskimage() {
 	# Create Data slice, if any.
 	if [ -n "$NANO_SLICE_DATA" -a "$NANO_SLICE_CFG" = "$NANO_SLICE_DATA" -a \
 	   "$NANO_DATASIZE" -ne 0 ]; then
-		pprint 2 "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
-		exit 2
+		err "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
 	fi
 	if [ $NANO_DATASIZE -ne 0 -a -n "$NANO_SLICE_DATA" ]; then
 		populate_data_slice /dev/${MD}${NANO_SLICE_DATA} "${NANO_DATADIR}" ${MNT} "${NANO_SLICE_DATA}"
@@ -340,6 +512,7 @@ _create_diskimage() {
 	pprint 3 "log: ${NANO_OBJ}/_.di"
 
 	(
+	local CODE_SIZE CONF_SIZE DATA_SIZE
 	local altroot bootloader cfgimage dataimage diskimage
 
 	CODE_SIZE=$(awk '$3 == 1 {print $2}' "${NANO_LOG}/_.partitioning")
@@ -362,7 +535,7 @@ _create_diskimage() {
 		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
 			echo "Duplicating to second image..."
 			tgt_switch_root_fstab "${NANO_SLICE_ROOT}" "${NANO_SLICE_ALTROOT}"
-			nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
+			nano_makefs "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 			    "${NANO_METALOG}" \
 			    "$(( (CODE_SIZE - METADATA_SECTS) * NANO_SECTOR_SIZE ))" \
 			    "${NANO_OBJ}/_.altroot.part" "${NANO_WORLDDIR}"
@@ -384,7 +557,7 @@ _create_diskimage() {
 	fi
 
 	# Create Config slice
-	_populate_cfg_part "${NANO_OBJ}/_.cfg.part" "${NANO_CFGDIR}" \
+	populate_cfg_part "${NANO_OBJ}/_.cfg.part" "${NANO_CFGDIR}" \
 	    "${NANO_SLICE_CFG}" "${CONF_SIZE}" "${NANO_METALOG_CFG}"
 	cfgimage="-p freebsd:=${NANO_OBJ}/_.cfg.part"
 
@@ -392,11 +565,10 @@ _create_diskimage() {
 	if [ -n "${NANO_SLICE_DATA}" ] &&
 	    [ "${NANO_SLICE_CFG}" = "${NANO_SLICE_DATA}" ] &&
 	    [ "${NANO_DATASIZE}" -ne 0 ]; then
-		pprint 2 "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
-		exit 2
+		err "NANO_SLICE_DATA is the same as NANO_SLICE_CFG, fix."
 	fi
 	if [ "${NANO_DATASIZE}" -ne 0 ] && [ -n "${NANO_SLICE_DATA}" ]; then
-		_populate_data_part "${NANO_OBJ}/_.data.part" "${NANO_DATADIR}" \
+		populate_data_part "${NANO_OBJ}/_.data.part" "${NANO_DATADIR}" \
 		    "${NANO_SLICE_DATA}" "${DATA_SIZE}" "${NANO_METALOG_DATA}"
 		dataimage="-p freebsd:=${NANO_OBJ}/_.data.part"
 	fi
@@ -414,4 +586,30 @@ _create_diskimage() {
 	    "${NANO_OBJ}/_.cfg.part"\
 	    "${NANO_OBJ}/_.data.part"
 	) > ${NANO_LOG}/_.di 2>&1
+}
+
+# Create the /etc/fstab file
+tgt_write_fstab() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	# Save config file for scripts
+	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
+	tgt_touch etc/nanobsd.conf
+
+	printf_fstab "# Device" Mountpoint FStype Options Dump "Pass#"
+	printf_fstab "/dev/${NANO_DRIVE}${NANO_ROOT}" / ufs ro 1 1
+	printf_fstab "/dev/${NANO_DRIVE}${NANO_SLICE_CFG}" /cfg ufs rw,noauto 2 2
+	tgt_touch etc/fstab
+	)
+}
+
+# Pick up config files from the special partition
+tgt_etc_remount() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	echo "mount -o ro /dev/${NANO_DRIVE}${NANO_SLICE_CFG}" > conf/default/etc/remount
+	tgt_touch conf/default/etc/remount
+	)
 }
