@@ -388,6 +388,205 @@ patch_precompiled() {
 }
 
 #######################################################################
+# freebsd-base(7) (pkgbase) variables and functions
+#
+
+# Use pkgbase.  If empty, pkgbase will be used
+NANO_NOPKGBASE=
+
+NANO_ABI=$(pkg config ABI)
+NANO_OSVERSION=$(pkg config OSVERSION)
+NANO_PKGBASE_DIR="base_latest"
+NANO_PORTS_DIR="latest"
+NANO_PKGBASE_LIST="FreeBSD-set-base FreeBSD-kernel-generic"
+
+#
+# Check whether a package name is present in NANO_PKGBASE_LIST
+# Input: $1 = package name to check
+# Output: return 0 if found, 1 if not
+#
+nano_pkgbase_list_contains() {
+	case " $NANO_PKGBASE_LIST " in
+	*"$1"*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# Return the non-kernel subset of NANO_PKGBASE_LIST plus "pkg"
+nano_pkgbase_world_list() {
+	local list
+
+	list="pkg" # Always install pkg
+	for package in $NANO_PKGBASE_LIST; do
+		case "$package" in
+		FreeBSD-kernel-*) continue ;;
+		*) list="${list} $package" ;;
+		esac
+	done
+
+	echo "$list"
+}
+
+# Return the kernel subsets from NANO_PKGBASE_LIST for separate kernel installation
+nano_pkgbase_kernel_list() {
+	local list
+
+	for package in $NANO_PKGBASE_LIST; do
+		case "$package" in
+		FreeBSD-kernel-*) list="${list}${list:+ }$package" ;;
+		*) continue ;;
+		esac
+	done
+
+	echo "$list"
+}
+
+#
+# Update the sha256 checksum of a file in the target pkg database
+# to match the current file on disk
+# Input: $1 = file path relative to NANO_WORLDDIR
+#
+tgt_pkg_update_file_sha256() {
+	local file sha256
+
+	file="${NANO_WORLDDIR}/${1}"
+
+	if [ -f "$file" ]; then
+		sha256=$(sha256 -q "${file}")
+		tgt_pkg shell "UPDATE files SET sha256 = '1\$${sha256}' WHERE path = '/${1}';"
+	else
+		err "File ${file} not found"
+	fi
+}
+
+#
+# Compact and verify the target pkg database
+#
+pkg_db_vacuum() {
+	tgt_pkg shell "VACUUM; PRAGMA integrity_check;"
+}
+
+# Run pkg(8) with the configured ABI, repo, and cache settings
+pkg_cmd() {
+	pkg --repo-conf-dir "$(nano_pkg_repos_dir)" \
+	    -o ABI="$NANO_ABI" \
+	    -o ASSUME_ALWAYS_YES=yes \
+	    -o IGNORE_OSVERSION=yes \
+	    -o OSVERSION="$NANO_OSVERSION" \
+	    -o PKG_CACHEDIR="$(nano_pkg_cachedir)" \
+	    "$@"
+}
+
+# Run pkg(8) with NANO_WORLDDIR as rootdir
+tgt_pkg() {
+	pkg_cmd --rootdir "$NANO_WORLDDIR" "$@"
+}
+
+# Run pkg(8) in chroot mode against NANO_WORLDDIR
+tgt_pkg_chroot() {
+	pkg --chroot "$NANO_WORLDDIR" \
+	    -o ABI="$NANO_ABI" \
+	    -o ASSUME_ALWAYS_YES=yes \
+	    -o IGNORE_OSVERSION=yes \
+	    -o OSVERSION="$NANO_OSVERSION" \
+	    "$@"
+}
+
+# Return the directory used to cache downloaded pkg packages during the build
+nano_pkg_cachedir() {
+	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
+}
+
+# Return the directory where pkg repository configuration files are written for the build.
+nano_pkg_repos_dir() {
+	echo "${NANO_OBJ}/_.pkg"
+}
+
+# Copies FreeBSD pkg signing key fingerprints from the source tree into NANO_WORLDDIR/usr/share/keys
+nano_freebsd_pkg_repo_keys() {
+	(
+	cd "${NANO_SRC}/share/keys"
+	find . ! -name "Makefile*" |
+	    cpio ${CPIO_SYMLINK} -dumpv "${NANO_WORLDDIR}/usr/share/keys"
+	)
+}
+
+# Write the FreeBSD.conf pkg repository config file to the build's repo config directory
+nano_pkg_repo_conf() {
+	mkdir -p "$(nano_pkg_repos_dir)"
+	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
+FreeBSD-ports: {
+  url: "pkg+https://pkg.freebsd.org/\${ABI}/${NANO_PORTS_DIR}",
+  mirror_type: "srv",
+  signature_type: "fingerprints",
+  fingerprints: "/usr/share/keys/pkg",
+  enabled: yes
+}
+FreeBSD-base: {
+  url: "pkg+https://pkg.freebsd.org/\${ABI}/${NANO_PKGBASE_DIR}",
+  mirror_type: "srv",
+  signature_type: "fingerprints",
+  fingerprints: "/usr/share/keys/pkg",
+  enabled: yes
+}
+EOF
+}
+
+nano_pkg_disable_repos() {
+	(
+	cd "$NANO_WORLDDIR"
+
+	# XXX: Is it better to just rewrite the entire file?
+	sed -i "" -E \
+	    -e "s/([[:space:]]*enabled[[:space:]]*:[[:space:]]*)(yes|true|on)/\1no/" \
+	    -e "s/To disable a repository/To enable a repository/" \
+	    -e "s/FreeBSD-ports: \{ enabled: no \}/FreeBSD-ports: { enabled: yes }/" \
+	    -e "s/FreeBSD-ports-kmods: \{ enabled: no \}/FreeBSD-ports-kmods: { enabled: yes }/" \
+	    -e "s/Note that the FreeBSD-base repository is disabled by default\./Note that all repositories are disabled by default./" \
+	    etc/pkg/FreeBSD.conf
+
+	if $do_precompiled; then
+		tgt_pkg_update_file_sha256 etc/pkg/FreeBSD.conf
+	fi
+	)
+}
+
+# Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache, and write the pkg repo config
+nano_configure_pkgbase_pkg() {
+	pprint 2 "configure pkg"
+	pprint 3 "log: ${NANO_LOG}/_.cp"
+
+	if [ ! -d "$NANO_LOG" ]; then
+		mkdir -p "$NANO_LOG"
+	fi
+
+	(
+	if [ -z "$NANO_PKGBASE_LIST" ]; then
+		err "NANO_PKGBASE_LIST variable is not set"
+	fi
+
+	nano_pkgbase_list_contains " FreeBSD-set-base " ||
+	    nano_pkgbase_list_contains " FreeBSD-set-minimal " ||
+	    err "FreeBSD-set-base or FreeBSD-set-minimal is mandatory"
+
+	nano_pkgbase_list_contains " FreeBSD-kernel-" ||
+	    err "A FreeBSD-kernel package is mandatory"
+
+	if $do_clean; then
+		rm -rf "${NANO_OBJ}/_.cache"
+	else
+		pprint 2 "Using existing packages (as instructed)"
+	fi
+
+	if [ ! -d "$(nano_pkg_cachedir)"  ]; then
+		mkdir -p "$(nano_pkg_cachedir)"
+	fi
+
+	nano_pkg_repo_conf
+	) > "${NANO_LOG}/_.cp" 2>&1
+}
+
+#######################################################################
 #
 # The functions which do the real work.
 # Can be overridden from the config file(s)
@@ -654,17 +853,26 @@ install_precompiled_world() {
 
 	(
 	set -o xtrace
-	for distset in $NANO_DISTRIBUTIONS; do
-		if [ "$distset" = "kernel.txz" ] || \
-		    [ "$distset" = "kernel-dbg.txz" ]; then
-			continue
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		nano_freebsd_pkg_repo_keys
+		tgt_pkg update
+		if [ -n "$(nano_pkgbase_world_list)" ]; then
+			tgt_pkg install -U -y $(nano_pkgbase_world_list)
 		fi
-		if [ -f "$(nano_distset_dir)/${distset}" ]; then
-			tar -xvf "$(nano_distset_dir)/${distset}" -C "${NANO_WORLDDIR}"
-		else
-			err "File $(nano_distset_dir)/${distset} not found"
-		fi
-	done
+		tgt_pkg_chroot triggers
+	else
+		for distset in $NANO_DISTRIBUTIONS; do
+			if [ "$distset" = "kernel.txz" ] || \
+			    [ "$distset" = "kernel-dbg.txz" ]; then
+				continue
+			fi
+			if [ -f "$(nano_distset_dir)/${distset}" ]; then
+				tar -xvf "$(nano_distset_dir)/${distset}" -C "${NANO_WORLDDIR}"
+			else
+				err "File $(nano_distset_dir)/${distset} not found"
+			fi
+		done
+	fi
 	) > "${NANO_LOG}/_.iw" 2>&1
 }
 
@@ -714,19 +922,25 @@ install_kernel() {
 
 # Install a precompiled kernel from pkgbase packages or distribution tarballs
 install_precompiled_kernel() {
-	pprint 2 "install precompiled kernel (GENERIC)"
+	pprint 2 "install precompiled kernel (${NANO_KERNEL})"
 	pprint 3 "log: ${NANO_LOG}/_.ik"
 
 	(
 	set -o xtrace
-	if [ -f "$(nano_distset_dir)/kernel.txz" ]; then
-		tar -xvf "$(nano_distset_dir)/kernel.txz" -C "${NANO_WORLDDIR}"
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		if [ -n "$(nano_pkgbase_kernel_list)" ]; then
+			tgt_pkg install -U -y $(nano_pkgbase_kernel_list)
+		fi
 	else
-		err "File $(nano_distset_dir)/kernel.txz not found"
-	fi
-	if nano_distributions_contains " kernel-dbg.txz " &&
-	    [ -f "$(nano_distset_dir)/kernel-dbg.txz" ]; then
-		tar -xvf "$(nano_distset_dir)/kernel-dbg.txz" -C "${NANO_WORLDDIR}"
+		if [ -f "$(nano_distset_dir)/kernel.txz" ]; then
+			tar -xvf "$(nano_distset_dir)/kernel.txz" -C "${NANO_WORLDDIR}"
+		else
+			err "File $(nano_distset_dir)/kernel.txz not found"
+		fi
+		if nano_distributions_contains " kernel-dbg.txz " &&
+		    [ -f "$(nano_distset_dir)/kernel-dbg.txz" ]; then
+			tar -xvf "$(nano_distset_dir)/kernel-dbg.txz" -C "${NANO_WORLDDIR}"
+		fi
 	fi
 	) > "${NANO_LOG}/_.ik" 2>&1
 }
@@ -854,6 +1068,11 @@ setup_nanobsd() {
 	# to have the symlink in error though.
 	tgt_dir2symlink usr/local/etc ../../etc/local 0755
 
+	# Disable all package repositories
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		nano_pkg_disable_repos
+	fi
+
 	for d in var etc; do
 		# Link /$d under /conf
 		# we use hard links so we have them both places.
@@ -866,6 +1085,11 @@ setup_nanobsd() {
 			    sort -u >> "${NANO_METALOG}.conf"
 		fi
 	done
+
+	# Ensure the /conf/default/var/db/pkg directory is present
+	if [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_dir conf/default/var/db/pkg
+	fi
 
 	if [ -n "$NANO_METALOG" ]; then
 		cat "${NANO_METALOG}.conf" >> "${NANO_METALOG}"
@@ -912,6 +1136,9 @@ setup_nanobsd_etc() {
 		echo "				# seeding."
 	} >> boot/defaults/loader.conf
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 444 boot/defaults/loader.conf
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		tgt_pkg_update_file_sha256 boot/defaults/loader.conf
+	fi
 
 	[ -n "${NANO_NOPRIV_BUILD}" ] && chmod 666 etc/defaults/rc.conf
 	if ! ed -s etc/defaults/rc.conf <<\EOF
@@ -1433,6 +1660,27 @@ set_defaults_and_export() {
 		NANO_METALOG=${NANO_OBJ}/_.metalog
 	fi
 
+	# Adjust pkgbase kernel names
+	if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
+		for package in $NANO_PKGBASE_LIST; do
+			case "$package" in
+			FreeBSD-kernel-*)
+				kernel="${package#FreeBSD-kernel-generic-}"
+				case "$kernel" in
+				mmccam*)
+					NANO_KERNEL="GENERIC-MMCCAM"
+					NANO_LOADER_KERNEL="kernel.GENERIC-MMCCAM"
+					;;
+				nodebug*)
+					NANO_KERNEL="GENERIC-NODEBUG"
+					NANO_LOADER_KERNEL="kernel.GENERIC-NODEBUG"
+					;;
+				esac
+				;;
+			esac
+		done
+	fi
+
 	NANO_STARTTIME=$(date +%s)
 	: ${NANO_TIMESTAMP:=${NANO_STARTTIME}}
 	pprint 3 "Exporting NanoBSD variables"
@@ -1468,6 +1716,7 @@ set_defaults_and_export() {
 	export_var NANO_MODULES
 	export_var NANO_NOPRIV_BUILD
 	export_var NANO_METALOG
+	export_var NANO_NOPKGBASE
 	export_var NANO_LOG
 	export_var SRCCONF
 	export_var SRC_ENV_CONF
