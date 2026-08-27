@@ -112,6 +112,8 @@ cust_install_files() {
 
 # Install packages listed in NANO_PACKAGE_LIST from NANO_PACKAGE_DIR
 cust_pkgng() {
+	# Unprivileged builds (-U) cannot install packages yet because
+	# pkg(8) may produce an invalid metalog (see also D58888 / PR 296409).
 	if ! $do_root && [ -n "$NANO_NOPRIV_BUILD" ]; then
 		pprint 2 'Skipping "cust_pkgng" (unprivileged builds not supported yet)'
 		return 0
@@ -132,21 +134,15 @@ cust_pkgng() {
 		if $do_clean; then
 			tgt_pkg install -F $NANO_PACKAGE_LIST
 		fi
-		mount -t nullfs -o noatime -o ro "$(nano_pkg_cachedir)" "${NANO_WORLDDIR}/var/cache/pkg"
-		trap "nano_umount ${NANO_WORLDDIR}/var/cache/pkg" 1 2 15 EXIT
 	fi
 
-	cp /etc/resolv.conf "${NANO_WORLDDIR}/etc/resolv.conf"
-	tgt_pkg_chroot install $NANO_PACKAGE_LIST
-	rm -f "${NANO_WORLDDIR}/etc/resolv.conf"
-	rm -rf "${NANO_WORLDDIR}/var/db/pkg/repos/"*
+	tgt_pkg install $NANO_PACKAGE_LIST
 
 	if [ -d "$NANO_PACKAGE_DIR" ]; then
 		trap - 1 2 15 EXIT
 		nano_umount "${NANO_WORLDDIR}/var/cache/pkg"
 	fi
 }
-
 
 #######################################################################
 # Patch adduser(8)
