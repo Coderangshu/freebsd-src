@@ -442,33 +442,42 @@ nano_pkgbase_list_contains() {
 	esac
 }
 
-# Return the non-kernel subset of NANO_PKGBASE_LIST plus "pkg"
-nano_pkgbase_world_list() {
-	local list
+#
+# Return NANO_PKGBASE_LIST by build target
+# Input: $1 = build target (optional "world" or "kernel")
+#
+nano_pkgbase_list() {
+	local list package target
 
-	list="pkg" # Always install pkg
+	target="$1"
+	list=""
+
+	[ "$target" = "world" ] || [ -z "$target" ] && list="pkg"
+
 	for package in $NANO_PKGBASE_LIST; do
 		case "$package" in
-		FreeBSD-kernel-*) continue ;;
-		*) list="${list} $package" ;;
+		FreeBSD-kernel-*)
+			{ [ "$target" = "kernel" ] || [ -z "$target" ]; } &&
+			list="${list}${list:+ }$package"
+			;;
+		*)
+			{ [ "$target" = "world" ] || [ -z "$target" ]; } &&
+			list="${list}${list:+ }$package"
+			;;
 		esac
 	done
 
 	echo "$list"
 }
 
-# Return the kernel subsets from NANO_PKGBASE_LIST for separate kernel installation
+# Return the non-kernel subset of NANO_PKGBASE_LIST plus "pkg"
+nano_pkgbase_world_list() {
+	nano_pkgbase_list "world"
+}
+
+# Return the kernel subset of NANO_PKGBASE_LIST
 nano_pkgbase_kernel_list() {
-	local list
-
-	for package in $NANO_PKGBASE_LIST; do
-		case "$package" in
-		FreeBSD-kernel-*) list="${list}${list:+ }$package" ;;
-		*) continue ;;
-		esac
-	done
-
-	echo "$list"
+	nano_pkgbase_list "kernel"
 }
 
 # Remove the existing NANO_METALOG file to generate new metalog
@@ -609,18 +618,13 @@ tgt_pkg_chroot() {
 	    "$@"
 }
 
-# Return the directory used to cache downloaded pkg packages during the build
+# Return the directory used to cache downloaded packages
 nano_pkg_cachedir() {
 	echo "${NANO_OBJ}/_.cache/${NANO_ABI}"
 }
 
-# Return the directory where pkg repository configuration files are written for the build.
-nano_pkg_repos_dir() {
-	echo "${NANO_OBJ}/_.pkg"
-}
-
-# Copies FreeBSD pkg signing key fingerprints from the source tree into NANO_WORLDDIR/usr/share/keys
-nano_freebsd_pkg_repo_keys() {
+# Copy FreeBSD pkg signing key fingerprints from the source tree
+nano_pkg_freebsd_repo_keys() {
 	(
 	cd "${NANO_SRC}/share/keys"
 	find . ! -name "Makefile*" |
@@ -628,8 +632,16 @@ nano_freebsd_pkg_repo_keys() {
 	)
 }
 
-# Write the FreeBSD.conf pkg repository config file to the build's repo config directory
+# Return the directory of package repository configuration files
+nano_pkg_repos_dir() {
+	echo "${NANO_OBJ}/_.pkg"
+}
+
+# Generate a FreeBSD.conf package repository configuration file
+# XXX: Try setting CONSERVATIVE_UPGRADE=no on the builder,
+# if it fails, we must set it explicitly in pkg_cmd
 nano_pkg_repo_conf() {
+	rm -rf "$(nano_pkg_repos_dir)"
 	mkdir -p "$(nano_pkg_repos_dir)"
 	cat > "$(nano_pkg_repos_dir)/FreeBSD.conf" <<EOF
 FreeBSD-ports: {
@@ -647,11 +659,26 @@ FreeBSD-base: {
   enabled: yes
 }
 EOF
+	# XXX: Add support for fingerprints in FreeBSD-local.conf
+	cat > "$(nano_pkg_repos_dir)/FreeBSD-local.conf" <<EOF
+FreeBSD-local: {
+  url: "file:///$(nano_pkg_cachedir)",
+  enabled: no
+}
+EOF
+}
+
+# XXX: Check if it is OK to clobber the cachedir like this
+# XXX: Add support for local fingerprints
+nano_pkg_repo() {
+	pkg_cmd repo "$(nano_pkg_cachedir)"
 }
 
 nano_pkg_disable_repos() {
 	(
 	cd "$NANO_WORLDDIR"
+
+	rm -rf var/db/pkg/repos/FreeBSD-local
 
 	# XXX: Is it better to just rewrite the entire file?
 	sed -i "" -E \
@@ -669,10 +696,13 @@ nano_pkg_disable_repos() {
 	)
 }
 
-# Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache, and write the pkg repo config
-nano_configure_pkgbase_pkg() {
+#
+# Validate NANO_PKGBASE_LIST requirements, optionally clean the package cache,
+# write the pkg repo config, and fetch pkgbase packages
+#
+nano_fetch_pkgbase_packages() {
 	pprint 2 "configure pkg"
-	pprint 3 "log: ${NANO_LOG}/_.cp"
+	pprint 3 "log: ${NANO_LOG}/_.pkgbase"
 
 	if [ ! -d "$NANO_LOG" ]; then
 		mkdir -p "$NANO_LOG"
@@ -692,16 +722,17 @@ nano_configure_pkgbase_pkg() {
 
 	if $do_clean; then
 		rm -rf "${NANO_OBJ}/_.cache"
+		rm -rf "${NANO_WORLDDIR}/var/db/pkg"
+		mkdir -p "$(nano_pkg_cachedir)"
+		nano_pkg_freebsd_repo_keys
+		nano_pkg_repo_conf
+		tgt_pkg update
+		tgt_pkg install -F $(nano_pkgbase_list)
+		nano_pkg_repo
 	else
 		pprint 2 "Using existing packages (as instructed)"
 	fi
-
-	if [ ! -d "$(nano_pkg_cachedir)"  ]; then
-		mkdir -p "$(nano_pkg_cachedir)"
-	fi
-
-	nano_pkg_repo_conf
-	) > "${NANO_LOG}/_.cp" 2>&1
+	) > "${NANO_LOG}/_.pkgbase" 2>&1
 }
 
 #######################################################################
@@ -831,9 +862,10 @@ tgt_dir2symlink() (
 # Assume default ownership and directory permissions
 #
 mtree_walk() {
-	local dir oifs path
+	local dir metalog oifs path
 
 	dir="$1"
+	metalog="${2:-$NANO_METALOG}"
 	path=""
 
 	oifs="$IFS"
@@ -841,7 +873,7 @@ mtree_walk() {
 	for d in $dir; do
 		path="${path}/${d}"
 		printf ".%s type=dir uname=%s gname=%s mode=0755\n" \
-		    "$path" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$NANO_METALOG"
+		    "$path" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" >> "$metalog"
 	done
 	IFS="$oifs"
 }
@@ -1027,10 +1059,10 @@ install_precompiled_world() {
 	(
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
-		nano_freebsd_pkg_repo_keys
-		tgt_pkg update
+		nano_pkg_freebsd_repo_keys
+		tgt_pkg update -r FreeBSD-local
 		if [ -n "$(nano_pkgbase_world_list)" ]; then
-			tgt_pkg install -U -y $(nano_pkgbase_world_list)
+			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_world_list)
 		fi
 		_xxx_tgt_pkg_triggers
 	else
@@ -1102,7 +1134,7 @@ install_precompiled_kernel() {
 	set -o xtrace
 	if [ -z "$NANO_NOPKGBASE" ]; then
 		if [ -n "$(nano_pkgbase_kernel_list)" ]; then
-			tgt_pkg install -U -y $(nano_pkgbase_kernel_list)
+			tgt_pkg install -r FreeBSD-local -U $(nano_pkgbase_kernel_list)
 		fi
 	else
 		if [ -f "$(nano_distset_dir)/kernel.txz" ]; then
@@ -1206,6 +1238,7 @@ fixup_before_diskimage() {
 
 		if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
 			_xxx_pkg_metalog
+			_xxx_run_pkg_scripts
 		fi
 
 		cp ${NANO_METALOG} ${NANO_METALOG}.pre
