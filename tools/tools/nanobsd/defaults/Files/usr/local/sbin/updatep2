@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Copyright (c) 2004-2005 Poul-Henning Kamp.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+
+#
+# Script to update partition 2 on a NanoBSD system.
+#
+# usage:
+#	ssh somewhere cat image.s1 | sh updatep2
+#
+
+set -e
+
+. /etc/nanobsd.conf
+
+: "${NANO_ALTROOT:?NANO_ALTROOT not set in /etc/nanobsd.conf}"
+: "${NANO_ROOT:?NANO_ROOT not set in /etc/nanobsd.conf}"
+
+root_mountfrom=$(kenv vfs.root.mountfrom)
+root_mountfrom=${root_mountfrom#*:}
+
+if [ "$root_mountfrom" = "/dev/gpt/${NANO_ALTROOT}" ]; then
+	echo "You are running partition 2 already." >&2
+	echo "You probably want to use 'updatep1' instead." >&2
+	exit 1
+fi
+
+component=$(glabel status | awk -v label="gpt/${NANO_ALTROOT}" '$1 == label {print $3}')
+if [ -z "$component" ]; then
+	echo "Could not find provider for 'gpt/${NANO_ALTROOT}'." >&2
+	exit 1
+fi
+index="${component##*p}"
+geom="${component%p*}"
+
+# Blow away old system
+dd if=/dev/zero of="/dev/gpt/${NANO_ALTROOT}" bs=1m count=1 status=none
+
+# Copy in new system
+dd of="/dev/gpt/${NANO_ALTROOT}" bs=1m iflag=fullblock status=progress
+
+# Check that it worked
+fsck_ufs -n "/dev/gpt/${NANO_ALTROOT}"
+
+# Update the /etc/fstab
+trap "umount /mnt" 1 2 15 EXIT
+mount "/dev/gpt/${NANO_ALTROOT}" /mnt
+sed -i "" "s/${NANO_ROOT}/${NANO_ALTROOT}/" /mnt/conf/base/etc/fstab
+sed -i "" "s/${NANO_ROOT}/${NANO_ALTROOT}/" /mnt/etc/fstab
+umount /mnt
+trap - 1 2 15 EXIT
+
+gpart set -a bootonce -i "$index" "$geom"
+
+echo "Done!"

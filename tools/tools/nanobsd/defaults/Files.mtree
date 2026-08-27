@@ -1,8 +1,16 @@
+#
+# To generate this mtree file:
+#   cd tools/tools/nanobsd
+#   mtree -c -p defaults/Files |
+#     mtree -C -k type,uname,gname,mode > defaults/Files.mtree
+# and update to the desired ownerships and permissions
+#
 . type=dir uname=root gname=wheel mode=0755
 ./usr type=dir uname=root gname=wheel mode=0755
 ./usr/local type=dir uname=root gname=wheel mode=0755
 ./usr/local/sbin type=dir uname=root gname=wheel mode=0755
 ./usr/local/sbin/change_password type=file uname=root gname=wheel mode=0555
+./usr/local/sbin/rollback type=file uname=root gname=wheel mode=0555
 ./usr/local/sbin/save_cfg type=file uname=root gname=wheel mode=0555
 ./usr/local/sbin/save_sshkeys type=file uname=root gname=wheel mode=0555
 ./usr/local/sbin/update type=file uname=root gname=wheel mode=0555
