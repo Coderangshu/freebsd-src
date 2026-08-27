@@ -32,6 +32,38 @@
 [ -n "$NANO_HEADS" ] || NANO_HEADS=16
 
 #
+# Sector size in bytes.
+# Accepts suffixes and products (4k, 1M, 4x1024)
+#
+NANO_SECTOR_SIZE=512
+
+# Target media size in 512 bytes sectors
+NANO_MEDIASIZE=4000000
+
+#
+# Size of code file system in 512 bytes sectors.
+# If zero, size will be as large as possible
+#
+NANO_CODESIZE=0
+
+#
+# Size of configuration file system in 512 bytes sectors.
+# Cannot be zero
+#
+NANO_CONFSIZE=2048
+
+# Size of data file system in 512 bytes sectors.
+# If zero: no partition configured.
+# If negative: max size possible
+NANO_DATASIZE=0
+
+# Size of the /etc ramdisk in 512 bytes sectors
+NANO_RAM_ETCSIZE=10240
+
+# Size of the /tmp+/var ramdisk in 512 bytes sectors
+NANO_RAM_TMPVARSIZE=81920
+
+#
 # The first partition should start at offset 16,
 # because the first 16 sectors are reserved for metadata
 #
@@ -184,7 +216,8 @@ _create_code_slice() {
 		echo "Partition will not be bootable"
 	fi
 	nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
-	    "${NANO_METALOG}" "$(( CODE_SIZE - METADATA_SECTS ))" \
+	    "${NANO_METALOG}" \
+	    "$(( (CODE_SIZE - METADATA_SECTS) * NANO_SECTOR_SIZE ))" \
 	    "${NANO_OBJ}/_.disk.part" "${NANO_WORLDDIR}"
 	mkimg -s bsd -S 512 --capacity $(( CODE_SIZE * 512 )) \
 	    ${bootcode} \
@@ -330,7 +363,8 @@ _create_diskimage() {
 			echo "Duplicating to second image..."
 			tgt_switch_root_fstab "${NANO_SLICE_ROOT}" "${NANO_SLICE_ALTROOT}"
 			nano_makefs "-DxZ ${NANO_MAKEFS} -o minfree=0,optimization=space" \
-			    "${NANO_METALOG}" "$(( CODE_SIZE - METADATA_SECTS ))" \
+			    "${NANO_METALOG}" \
+			    "$(( (CODE_SIZE - METADATA_SECTS) * NANO_SECTOR_SIZE ))" \
 			    "${NANO_OBJ}/_.altroot.part" "${NANO_WORLDDIR}"
 			tgt_switch_root_fstab "${NANO_SLICE_ALTROOT}" "${NANO_SLICE_ROOT}"
 			if [ -f "${NANO_WORLDDIR}/boot/boot" ]; then
