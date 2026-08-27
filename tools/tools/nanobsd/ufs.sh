@@ -30,6 +30,47 @@ set -e
 NANO_PLAN=default
 
 #
+# Partition layout varies by NANO_BOOT_TYPE (partitions are emitted in this
+# order by calculate_partitioning).
+#
+# Notes common to all layouts:
+#   - [PMBR boot code] is written via "mkimg -b boot/pmbr"; it is the
+#     protective MBR boot code, not a GPT partition entry.
+#   - gptboot0 carries /boot/gptboot; only present for BIOS boot type.
+#   - efiboot0 is the sole ESP; it carries gptboot.efi, which selects
+#     the root partition from the GPT bootme/bootonce attributes.
+#   - [freebsd-swap/swap0] is only created when NANO_SWAP_SIZE > 0.
+#   - root B (${NANO_LABEL}2) only exists when NANO_IMAGES > 1.
+#
+# "BIOS":
+#   [PMBR boot code]                boot/pmbr (not a GPT entry)
+#   [freebsd-boot/gptboot0]         /boot/gptboot
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+# "UEFI":
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+# "BIOS UEFI" (default):
+#   [PMBR boot code]                boot/pmbr (not a GPT entry)
+#   [freebsd-boot/gptboot0]         /boot/gptboot
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+
+#
 # Space-separated list of boot types; options: BIOS, UEFI (case-insensitive).
 # Default enables both.
 #
