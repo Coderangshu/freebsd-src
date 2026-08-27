@@ -108,3 +108,24 @@ _xxx_add_sys_symlink() {
 		echo "./sys type=link uname=root gname=wheel mode=0755 link=usr/src/sys" >> "$NANO_METALOG"
 	fi
 }
+
+#
+# pkg triggers should not need a chroot (lua script)
+# https://github.com/freebsd/pkg/issues/2673
+# Installing pkgbase as a user into a directory, these errors are thrown:
+# ldconfig: mkstemp(/var/run/ld-elf.so.hints.z0DWDA): Permission denied
+# pkg: Failed to create /triggers:Bad file descriptor
+#
+_xxx_tgt_pkg_triggers() {
+	if ! $do_root; then
+		# Repopulate mandoc dbs and add to metalog
+		for mandir in usr/share/man usr/share/openssl/man; do
+			[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
+			makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
+			metalog_add_data "./${mandir}/mandoc.db"
+		done
+		find "${NANO_WORLDDIR}/var/db/pkg/triggers" -type f -delete
+	else
+		tgt_pkg_chroot triggers
+	fi
+}
