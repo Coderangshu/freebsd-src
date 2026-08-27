@@ -214,6 +214,8 @@ create_cidata_partition() {
 	rm -rf "$cidatadir"
 	mkdir -p "$cidatadir"
 
+	is_defined populate_cidata_partition && populate_cidata_partition
+
 	makefs -t msdos \
 	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
