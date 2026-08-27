@@ -25,7 +25,7 @@
 # SUCH DAMAGE.
 #
 #
-# This file is heavily derived from both Sam Leffler's Avilia config,
+# This file is heavily derived from both Sam Leffler's Avila config,
 # as well as the BSDRP project's config file.  Neither of these have
 # an explicit copyright/license statement, but are implicitly BSDL. This
 # example has been taken from the FreeNAS project (an early version) and
