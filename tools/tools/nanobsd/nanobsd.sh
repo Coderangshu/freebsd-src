@@ -68,9 +68,6 @@ do_native_xtools=false
 do_precompiled=false
 do_prep_image=true
 
-# Pull in legacy stuff for now automatically
-. "${topdir}/legacy.sh"
-
 set +e
 args=$(getopt BKXWbc:fhiIknPpqUvw $*)
 if [ $? -ne 0 ]; then
@@ -182,6 +179,10 @@ if [ $# -gt 0 ]; then
 	echo "$0: Extraneous arguments supplied"
 	usage
 fi
+
+# Transition hack -- If you get this warning, add 'legacy' to your nano config file
+[ -n "$NANO_PLAN" ] || echo "Warning: no plan defined, assuming legacy config."
+[ -n "$NANO_PLAN" ] || legacy
 
 #######################################################################
 # And then it is as simple as that...

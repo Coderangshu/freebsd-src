@@ -27,6 +27,8 @@
 #
 #
 
+NANO_PLAN=legacy
+
 # Media geometry, only relevant if bios doesn't understand LBA.
 [ -n "$NANO_SECTS" ] || NANO_SECTS=63
 [ -n "$NANO_HEADS" ] || NANO_HEADS=16
@@ -243,7 +245,7 @@ populate_data_slice() {
 # Calculate MBR partition layout (start offset, size, index)
 # from media/image/code/conf/data sizes
 #
-calculate_partitioning() {
+is_defined calculate_partitioning || calculate_partitioning() {
 	echo $NANO_MEDIASIZE $NANO_IMAGES \
 		$NANO_SECTS $NANO_HEADS \
 		$NANO_CODESIZE $NANO_CONFSIZE $NANO_DATASIZE |
@@ -405,7 +407,7 @@ _create_code_slice() {
 # Assemble a full MBR disk image using mdconfig and gpart,
 # write all partitions (root, altroot, cfg, data) via live mounts
 #
-create_diskimage() {
+is_defined create_diskimage || create_diskimage() {
 	pprint 2 "build diskimage"
 	pprint 3 "log: ${NANO_OBJ}/_.di"
 
