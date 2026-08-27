@@ -45,6 +45,20 @@ _xxx_libarchive_mtree_bug() {
 # freebsd-base(7) (pkgbase) variables and functions
 #
 
+# Append metalog entries for directories that lack pkg tags in
+# the given mtree spec.  This should be fixed in pkg:
+# https://github.com/freebsd/pkg/issues/2672
+# $1 = mtree filename (under NANO_SRC/etc/mtree)
+# $2 = base dir prefix to prepend
+_xxx_get_untagged_directories_from_mtree() {
+	local mtree="$1"
+	local base_dir="$2"
+
+	cat "${NANO_SRC}/etc/mtree/${mtree}" |
+	    mtree -C -K uname,gname,tags | grep -v tags |
+	    sed -e "s|^\.|\.${base_dir}|g" >> "$NANO_METALOG"
+}
+
 # mtree: ./boot/dtb/arm: missing directory in specification
 #       These directories are missing from BSD.root.dist, however
 #       I do not want to add them to the mtree.  These must exist
