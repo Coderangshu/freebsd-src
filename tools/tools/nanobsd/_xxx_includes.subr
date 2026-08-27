@@ -94,3 +94,17 @@ metalog_add_data() {
 		    "$entry" "$type" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" >> "$metalog"
 	fi
 }
+
+#
+# If we do "make distribution", this directory must be present.
+# XXX: Discuss adding this as a pkg script in base
+#
+_xxx_add_sys_symlink() {
+	(
+	cd "${NANO_WORLDDIR}"
+	ln -sf usr/src/sys sys
+	)
+	if [ -n "$NANO_METALOG" ]; then
+		echo "./sys type=link uname=root gname=wheel mode=0755 link=usr/src/sys" >> "$NANO_METALOG"
+	fi
+}
