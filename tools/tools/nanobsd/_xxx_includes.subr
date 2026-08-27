@@ -40,3 +40,31 @@ _xxx_remove_extra_dist_files() {
 _xxx_libarchive_mtree_bug() {
 	sed -i "" -e 's|^/\. |\. |' "$NANO_METALOG"
 }
+
+#######################################################################
+# freebsd-base(7) (pkgbase) variables and functions
+#
+
+#
+# Add an entry to the metalog
+# $1=file/direcrory, $2=mode (optional), $3=metalog file (optional)
+#
+metalog_add_data() {
+	local entry metalog mode type
+
+	entry="$1"
+	if [ -f "${NANO_WORLDDIR}/${entry}" ]; then
+		type="file"
+		mode=${2:-0644}
+	elif [ -d "${NANO_WORLDDIR}/${entry}" ]; then
+		type="dir"
+		mode=${2:-0755}
+	else
+		err "metalog_add_data: ${entry} not found"
+	fi
+	metalog=${3:-$NANO_METALOG}
+	if [ -n "$metalog" ]; then
+		printf "%s type=%s uname=%s gname=%s mode=%s\n" \
+		    "$entry" "$type" "$NANO_DEF_UNAME" "$NANO_DEF_GNAME" "$mode" >> "$metalog"
+	fi
+}
