@@ -183,9 +183,16 @@ if [ $# -gt 0 ]; then
 	usage
 fi
 
+if $do_precompiled && [ "${NANO_PLAN:-legacy}" != "default" ]; then
+	echo "$0: -P requires a config file that selects the 'default' plan" 1>&2
+	exit 1
+fi
+
 # Transition hack -- If you get this warning, add 'legacy' to your nano config file
-[ -n "$NANO_PLAN" ] || echo "Warning: no plan defined, assuming legacy config."
-[ -n "$NANO_PLAN" ] || legacy
+if [ -z "$NANO_PLAN" ]; then
+	echo "Warning: no plan defined, assuming legacy config."
+	legacy
+fi
 
 #######################################################################
 # And then it is as simple as that...
