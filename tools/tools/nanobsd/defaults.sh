@@ -617,14 +617,30 @@ tgt_pkg() {
 	pkg_cmd --rootdir "$NANO_WORLDDIR" ${install_as_user} ${metalog} "$@"
 }
 
-# Run pkg(8) in chroot mode against NANO_WORLDDIR
+#
+# Run pkg(8) in chroot mode against NANO_WORLDDIR.
+# chroot(2) happens before "pkg -o" paths are opened, so NANO_METALOG's
+# host path can't be used directly as METALOG, so write to a path inside
+# NANO_WORLDDIR instead and merge it into NANO_METALOG afterward.
+#
 tgt_pkg_chroot() {
+	local chroot_metalog=""
+
+	if [ -n "$NANO_METALOG" ]; then
+		chroot_metalog="/var/tmp/_.metalog"
+		: > "${NANO_WORLDDIR}${chroot_metalog}"
+	fi
 	pkg --chroot "$NANO_WORLDDIR" \
 	    -o ABI="$NANO_ABI" \
 	    -o ASSUME_ALWAYS_YES=yes \
 	    -o IGNORE_OSVERSION=yes \
 	    -o OSVERSION="$(nano_pkg_osversion)" \
+	    ${chroot_metalog:+-o METALOG=${chroot_metalog}} \
 	    "$@"
+	if [ -n "$chroot_metalog" ]; then
+		cat "${NANO_WORLDDIR}${chroot_metalog}" >> "$NANO_METALOG"
+		rm -f "${NANO_WORLDDIR}${chroot_metalog}"
+	fi
 }
 
 # Return the ABI-level repository root; "make packages" REPODIR lands here
