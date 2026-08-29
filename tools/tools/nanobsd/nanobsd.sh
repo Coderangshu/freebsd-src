@@ -183,9 +183,16 @@ if [ $# -gt 0 ]; then
 	usage
 fi
 
+if $do_precompiled && [ "${NANO_PLAN:-legacy}" != "default" ]; then
+	echo "$0: -P requires a config file that selects the 'default' plan" 1>&2
+	exit 1
+fi
+
 # Transition hack -- If you get this warning, add 'legacy' to your nano config file
-[ -n "$NANO_PLAN" ] || echo "Warning: no plan defined, assuming legacy config."
-[ -n "$NANO_PLAN" ] || legacy
+if [ -z "$NANO_PLAN" ]; then
+	echo "Warning: no plan defined, assuming legacy config."
+	legacy
+fi
 
 #######################################################################
 # And then it is as simple as that...
@@ -228,27 +235,28 @@ else
 	pprint 2 "Skipping buildkernel (as instructed)"
 fi
 
-if $do_precompiled && [ -z "$NANO_NOPKGBASE" ]; then
-	nano_fetch_pkgbase_packages
-	if ! $do_root; then
+if [ -z "$NANO_NOPKGBASE" ]; then
+	$do_precompiled || build_packages
+	nano_setup_pkg_repo
+	if [ -n "${NANO_METALOG}" ]; then
 		nano_pkgbase_reset_metalog
 	fi
 else
 	nano_fetch_distsets
-	if ! $do_root; then
+	if [ -n "${NANO_METALOG}" ]; then
 		nano_distset_metalog
 	fi
 fi
 
 if $do_installworld; then
 	clean_world
-	if $do_precompiled; then
-		install_precompiled_world
+	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
+		install_world_binaries
 	else
 		make_conf_install
 		install_world
-		install_etc
 	fi
+	install_etc
 else
 	pprint 2 "Skipping installworld (as instructed)"
 fi
@@ -260,8 +268,8 @@ if ${do_prep_image}; then
 	setup_nanobsd_etc
 fi
 if $do_installkernel; then
-	if $do_precompiled; then
-		install_precompiled_kernel
+	if $do_precompiled || [ -z "$NANO_NOPKGBASE" ]; then
+		install_kernel_binaries
 	else
 		install_kernel
 	fi

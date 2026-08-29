@@ -30,6 +30,47 @@ set -e
 NANO_PLAN=default
 
 #
+# Partition layout varies by NANO_BOOT_TYPE (partitions are emitted in this
+# order by calculate_partitioning).
+#
+# Notes common to all layouts:
+#   - [PMBR boot code] is written via "mkimg -b boot/pmbr"; it is the
+#     protective MBR boot code, not a GPT partition entry.
+#   - gptboot0 carries /boot/gptboot; only present for BIOS boot type.
+#   - efiboot0 is the sole ESP; it carries gptboot.efi, which selects
+#     the root partition from the GPT bootme/bootonce attributes.
+#   - [freebsd-swap/swap0] is only created when NANO_SWAP_SIZE > 0.
+#   - root B (${NANO_LABEL}2) only exists when NANO_IMAGES > 1.
+#
+# "BIOS":
+#   [PMBR boot code]                boot/pmbr (not a GPT entry)
+#   [freebsd-boot/gptboot0]         /boot/gptboot
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+# "UEFI":
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+# "BIOS UEFI" (default):
+#   [PMBR boot code]                boot/pmbr (not a GPT entry)
+#   [freebsd-boot/gptboot0]         /boot/gptboot
+#   [efi/efiboot0]                  ESP carrying gptboot.efi (FAT)
+#   [freebsd-swap/swap0]            swap (optional)
+#   [freebsd-ufs/${NANO_LABEL}1]    root A (read-only)
+#   [freebsd-ufs/${NANO_LABEL}2]    root B (read-only, A/B updates)
+#   [freebsd-ufs/cfg]               configuration partition
+#   [freebsd-ufs/data]              data partition (optional)
+#
+
+#
 # Space-separated list of boot types; options: BIOS, UEFI (case-insensitive).
 # Default enables both.
 #
@@ -153,19 +194,9 @@ create_boot_partition() {
 
 # Create an EFI System Partition image file
 create_esp_partition() {
-	local bootcode efibootname espdir esp_sects fat_type
+	local bootcode efibootname espdir esp_sects
 
-	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
-	MINCLS16=4085	# minimum FAT16 clusters (0xff5U)
-	MINCLS32=65525	# minimum FAT32 clusters (0xfff5U)
 	esp_sects=$(awk '$5 == "efiboot0" {print $4}' "${NANO_LOG}/_.partitioning")
-	if [ "$esp_sects" -ge "$MINCLS32" ]; then
-		fat_type=32
-	elif [ "$esp_sects" -ge "$MINCLS16" ]; then
-		fat_type=16
-	else
-		fat_type=12
-	fi
 
 	espdir="${NANO_OBJ}/_.efi"
 	rm -rf "$espdir"
@@ -183,11 +214,10 @@ create_esp_partition() {
 	# XXXJL https://wiki.archlinux.org/title/EFI_system_partition#Firmware_does_not_see_the_EFI_directory
 	#       Other FreeBSD tools use EFISYS
 	makefs -t msdos \
-	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
 	    -o volume_label="EFI" \
 	    -o OEM_string="" \
-	    -s "${esp_sects}b" \
+	    -s "$(( esp_sects * NANO_SECTOR_SIZE ))" \
 	    -T "$NANO_TIMESTAMP" \
 	    "${NANO_OBJ}/_.efiboot0.image" "$espdir"
 
@@ -196,19 +226,9 @@ create_esp_partition() {
 
 # Create an MS Basic Data Partition for nuageinit (cidata)
 create_cidata_partition() {
-	local cidatadir cidata_sects fat_type
+	local cidatadir cidata_sects
 
-	# Since sectors_per_cluster=1, assume 1 cluster = 1 sector
-	MINCLS16=4085	# minimum FAT16 clusters (0xff5U)
-	MINCLS32=65525	# minimum FAT32 clusters (0xfff5U)
 	cidata_sects=$(awk -v label="cidata" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
-	if [ "$cidata_sects" -ge "$MINCLS32" ]; then
-		fat_type=32
-	elif [ "$cidata_sects" -ge "$MINCLS16" ]; then
-		fat_type=16
-	else
-		fat_type=12
-	fi
 
 	cidatadir="${NANO_OBJ}/_.cidata"
 	rm -rf "$cidatadir"
@@ -217,11 +237,10 @@ create_cidata_partition() {
 	is_defined populate_cidata_partition && populate_cidata_partition
 
 	makefs -t msdos \
-	    -o fat_type="$fat_type" \
 	    -o sectors_per_cluster=1 \
 	    -o volume_label="CIDATA" \
 	    -o OEM_string="" \
-	    -s "${cidata_sects}b" \
+	    -s "$(( cidata_sects * NANO_SECTOR_SIZE ))" \
 	    -T "$NANO_TIMESTAMP" \
 	    "${NANO_OBJ}/_.cidata.image" "$cidatadir"
 
@@ -253,7 +272,7 @@ calculate_partitioning() {
 	echo "$NANO_MEDIASIZE" "$NANO_IMAGES" "$NANO_SECTOR_SIZE" \
 	    "$NANO_CODESIZE" "$NANO_CONFSIZE" "$NANO_DATASIZE" "$boot_type" \
 	    "$boot_sects" "$esp_sects" "$NANO_SWAP_SIZE" "$NANO_ROOT" \
-	    "$NANO_ALTROOT" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
+	    "${NANO_ALTROOT:--}" "$NANO_PARTITION_CFG" "$NANO_PARTITION_DATA" \
 	    "$align" "$cidata_sects" | awk '
 	function roundup(sects) {
 		return int((sects + align - 1) / align) * align
@@ -362,6 +381,11 @@ calculate_partitioning() {
 			code_sects = roundup(code_sects)
 		}
 
+		if (code_sects <= 0) {
+			print "Media too small for code partitions" > "/dev/stderr"
+			exit 2
+		}
+
 		# First code partition
 		print_line("freebsd-ufs", code_sects, $11)
 
@@ -423,7 +447,8 @@ create_diskimage() {
 	(
 	local IMG code_sects code_size cfg_sects cfg_size data_sects data_size
 	local bootcode cfg cidata data efiboot0 gptboot0 swap0
-	local code1 "${NANO_ROOT}" code2 "${NANO_ALTROOT}" # XXX: NANO_ALTROOT
+	local part_root part_altroot
+	local "${NANO_ROOT}" ${NANO_ALTROOT} # XXX NANO_ALTROOT
 
 	IMG=${NANO_DISKIMGDIR}/${NANO_IMGNAME}
 	code_sects=$(awk -v label="$NANO_ROOT" '$5 == label {print $4}' "${NANO_LOG}/_.partitioning")
@@ -457,11 +482,13 @@ create_diskimage() {
 	done
 
 	# Use fixed variable names when dealing with code partitions
-	eval "code1=\"\$${NANO_ROOT}\""
-	eval "code2=\"\$${NANO_ALTROOT}\""
+	eval "part_root=\"\$${NANO_ROOT}\""
+	if [ -n "${NANO_ALTROOT}" ]; then
+		eval "part_altroot=\"\$${NANO_ALTROOT}\""
+	fi
 
-	# Rename code1 image name to match NANO_IMG1NAME
-	code1=$(echo "$code1" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
+	# Rename root image name to match NANO_IMG1NAME
+	part_root=$(echo "$part_root" | sed "s|${NANO_OBJ}/_.${NANO_ROOT}.image|${NANO_DISKIMGDIR}/${NANO_IMG1NAME}|")
 
 	# Create boot partition (if any)
 	is_boot_type BIOS && create_boot_partition
@@ -482,13 +509,13 @@ create_diskimage() {
 	if [ "$NANO_IMAGES" -gt 1 ]; then
 		if [ "$NANO_INIT_IMG2" -gt 0 ]; then
 			echo "Duplicating to second image..."
-			tgt_switch_root_fstab 1 2
+			tgt_switch_root_fstab "${NANO_ROOT}" "${NANO_ALTROOT}"
 			nano_makefs "ffs" "${NANO_MAKEFS} -o minfree=0,optimization=space" \
 			    "${NANO_METALOG}" "$code_size" \
 			    "${NANO_OBJ}/_.${NANO_ALTROOT}.image" "${NANO_WORLDDIR}"
-			tgt_switch_root_fstab 2 1
+			tgt_switch_root_fstab "${NANO_ALTROOT}" "${NANO_ROOT}"
 		else
-			code2=$(echo "$code2" |
+			part_altroot=$(echo "$part_altroot" |
 			    sed "s#=${NANO_OBJ}/_.${NANO_ALTROOT}.image#:${code_size}#")
 		fi
 	fi
@@ -506,15 +533,19 @@ create_diskimage() {
 	fi
 
 	echo "Writing out ${NANO_IMGNAME}..."
-	mkimg -s gpt -S ${NANO_SECTOR_SIZE} \
+	# GPT LBA addressing stays 512 (-S) for bootloader compatibility
+	# gptboot.efi assume 512-byte LBAs and can't be told otherwise.
+    # NANO_SECTOR_SIZE still drives the physical block size (-P,
+    # partition alignment) and filesystem content (makefs -S).
+	mkimg -s gpt -S 512 -P ${NANO_SECTOR_SIZE} \
 	    --capacity ${NANO_MEDIASIZE} \
 	    ${bootcode} \
 	    ${gptboot0} \
 	    ${cidata} \
 	    ${efiboot0} \
 	    ${swap0} \
-	    ${code1} \
-	    ${code2} \
+	    ${part_root} \
+	    ${part_altroot} \
 	    ${cfg} \
 	    ${data} \
 	    -o ${IMG}
@@ -529,13 +560,20 @@ create_diskimage() {
 	) > "${NANO_LOG}/_.di" 2>&1
 }
 
+#
+# Rewrite the root device in the image's fstab files from one GPT label
+# to another, used when building the alternate root image.
+# Input: $1 = current label (e.g. code1), $2 = new label (e.g. code2)
+#
 tgt_switch_root_fstab() {
-	local current new
+	local current new f
+
 	current="$1"
 	new="$2"
 
-	for f in ${NANO_WORLDDIR}/etc/fstab ${NANO_WORLDDIR}/conf/base/etc/fstab; do
-		sed -i "" "s=/dev/gpt/${NANO_LABEL}${current}=/dev/gpt/${NANO_LABEL}${new}=g" "${f}"
+	for f in "${NANO_WORLDDIR}/etc/fstab" "${NANO_WORLDDIR}/conf/base/etc/fstab"; do
+		[ -f "${f}" ] || continue
+		sed -i "" "s=/dev/gpt/${current}=/dev/gpt/${new}=g" "${f}"
 	done
 }
 

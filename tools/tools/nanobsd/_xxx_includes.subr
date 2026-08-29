@@ -247,15 +247,21 @@ _xxx_add_sys_symlink() {
 #
 _xxx_tgt_pkg_triggers() {
 	if ! $do_root; then
-		# Repopulate mandoc dbs and add to metalog
+		# Repopulate mandoc dbs
 		for mandir in usr/share/man usr/share/openssl/man; do
 			[ -d "${NANO_WORLDDIR}/${mandir}" ] || continue
 			makewhatis "${NANO_WORLDDIR}/${mandir}" 2>/dev/null || true
-			metalog_add_data "./${mandir}/mandoc.db"
 		done
 		[ -d "${NANO_WORLDDIR}/var/db/pkg/triggers" ] &&
 		    find "${NANO_WORLDDIR}/var/db/pkg/triggers" -type f -delete
 	else
 		tgt_pkg_chroot triggers
+	fi
+	if [ -n "$NANO_METALOG" ]; then
+		for mandir in usr/share/man usr/share/openssl/man; do
+			if [ -f "${NANO_WORLDDIR}/${mandir}/mandoc.db" ]; then
+				metalog_add_data "./${mandir}/mandoc.db"
+			fi
+		done
 	fi
 }
